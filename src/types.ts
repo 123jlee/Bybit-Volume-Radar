@@ -1,4 +1,4 @@
-export type Timeframe = '30m' | '240'; // 4h = 240
+export type Timeframe = '5m' | '30m' | '240'; // 4h = 240
 
 export interface OHLCV {
     time: number;

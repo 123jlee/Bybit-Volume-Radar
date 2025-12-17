@@ -65,6 +65,7 @@ export class BybitService {
                     openInterest: parseFloat(t.openInterest),
                     change24h: parseFloat(t.price24hPcnt),
                     candles: {
+                        '5m': [],
                         '30m': [],
                         '240': []
                     }
@@ -85,10 +86,10 @@ export class BybitService {
         limit: number = 50,
         apiBase: string,
     ): Promise<OHLCV[]> {
-        // Bybit Interval map: '30' -> 30m, '240' -> 4h
-        // API expects: 1, 3, 5, 15, 30, 60, 120, 240, D, W, M
-        // Our 'timeframe' type is '30m' (custom) or '240'. Actually our generic type says '30m' but API wants '30'.
-        const apiInterval = timeframe === '30m' ? '30' : '240';
+        // Bybit Interval map: '5' -> 5m, '30' -> 30m, '240' -> 4h
+        let apiInterval = '240';
+        if (timeframe === '5m') apiInterval = '5';
+        if (timeframe === '30m') apiInterval = '30';
 
         const response = await this.request<{ list: string[][] }>(
             `/v5/market/kline?category=linear&symbol=${symbol}&interval=${apiInterval}&limit=${limit}`,

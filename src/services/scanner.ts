@@ -10,13 +10,17 @@ export class ScannerEngine {
         if (this.isScanning) return;
         this.isScanning = true;
         this.runLoop();
-        // Poll every 30s
-        this.intervalId = setInterval(() => this.runLoop(), 30000);
+        // Poll every 60s
+        this.intervalId = setInterval(() => this.runLoop(), 60000);
     }
 
     public stop() {
         this.isScanning = false;
         if (this.intervalId) clearInterval(this.intervalId);
+    }
+
+    public getStatus() {
+        return this.isScanning;
     }
 
     private async runLoop() {
@@ -30,7 +34,7 @@ export class ScannerEngine {
             return;
         }
 
-        const BATCH_SIZE = 3;
+        const BATCH_SIZE = 5;
 
         for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
             const batch = symbols.slice(i, i + BATCH_SIZE);
@@ -39,6 +43,7 @@ export class ScannerEngine {
                 await this.scanSymbol(symbolData.symbol, settings);
             }));
 
+            // Rate limit safety
             await new Promise(res => setTimeout(res, 500));
         }
     }
@@ -48,25 +53,25 @@ export class ScannerEngine {
         const LOOKBACK = 100;
 
         try {
-            const [candles30m, candles4h] = await Promise.all([
-                BybitService.fetchCandles(symbol, '30m', LOOKBACK, settings.apiEndpoint),
-                BybitService.fetchCandles(symbol, '240', LOOKBACK, settings.apiEndpoint)
+            const [candles5m, candles30m] = await Promise.all([
+                BybitService.fetchCandles(symbol, '5m', LOOKBACK, settings.apiEndpoint),
+                BybitService.fetchCandles(symbol, '30m', LOOKBACK, settings.apiEndpoint)
             ]);
 
             // Update Store
             const currentData = Store.getSymbol(symbol);
             if (currentData) {
+                currentData.candles['5m'] = candles5m;
                 currentData.candles['30m'] = candles30m;
-                currentData.candles['240'] = candles4h;
-                if (candles30m.length > 0) {
-                    currentData.price = candles30m[candles30m.length - 1].close;
+                if (candles5m.length > 0) {
+                    currentData.price = candles5m[candles5m.length - 1].close;
                 }
                 Store.updateSymbol(currentData);
             }
 
             // Analyze
+            this.analyze(symbol, '5m', candles5m, settings);
             this.analyze(symbol, '30m', candles30m, settings);
-            this.analyze(symbol, '240', candles4h, settings);
 
         } catch (e) {
             console.error(`Failed to scan ${symbol}`, e);
@@ -99,21 +104,15 @@ export class ScannerEngine {
 
         // We want the EMA/StdDev of the HISTORY (excluding current developing candle)
         // candles[0] is oldest, candles[last] is current (developing)
-        // wait, BybitService returns oldest -> newest. Correct.
-        // So history is candles.slice(0, -1).
-
+        // BybitService returns oldest -> newest.
         const historyVectors = volumes.slice(0, -1);
 
         // Calculate EMA on the full history to let it stabilize
-        // We take the LAST calculated EMA value as our baseline
         const ema = calculateEMA(historyVectors, period);
 
         // Calculate StdDev on the recent window (last 21 of history)
         const recentHistory = historyVectors.slice(-period);
-        const stdDev = calculateStdDev(recentHistory, ema); // StdDev around the EMA? Or around simple Mean?
-        // Standard Bollinger Band / Z-Score uses Simple Moving Average for StdDev usually.
-        // But prompt says "EMA(21) / StdDev(21)". 
-        // Let's use StdDev relative to the EMA for "deviation from trend".
+        const stdDev = calculateStdDev(recentHistory, ema);
 
         return { ema, stdDev };
     }
@@ -128,13 +127,6 @@ export class ScannerEngine {
 
         // Formula: (Current Volume - EMA(21)) / StdDev(21)
         const zScore = (current.volume - stats.ema) / stats.stdDev;
-
-        // Filter Criteria: Keep symbol IF Z-Score > 2.0 (or settings.minZScore)
-        // Prompt says "Filter Criteria: Keep symbol IF Z-Score > 2.0"
-        // We should respect settings if possible, but the prompt gave specific constraints.
-        // "Tagging: Medium > 2.0, High > 3.0"
-        // Let's use the explicit prompt rules, but default to settings if higher? 
-        // Let's stick to prompt "Z-Score > 2.0".
 
         if (zScore > 2.0) {
             // Classification
