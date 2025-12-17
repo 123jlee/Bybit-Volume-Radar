@@ -1,39 +1,73 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Store } from '../services/store';
 import { HistoricalReporter } from '../services/reporter';
-import type { VolumeEvent, Timeframe } from '../types';
-import { Download, PlayCircle, Loader2, TrendingUp, TrendingDown } from 'lucide-react';
+import type { VolumeEvent, ReportConfig, ReportState } from '../types';
+import { Download, PlayCircle, Loader2, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
+import { MultiSelect } from './ui/MultiSelect';
 import clsx from 'clsx';
 
 export const Reports: React.FC = () => {
+    // --- Persistent State ---
     const [symbols, setSymbols] = useState<string[]>([]);
-    const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
-    const [timeframe, setTimeframe] = useState<Timeframe>('240');
-    const [lookback, setLookback] = useState<number>(500);
-    const [minZScore, setMinZScore] = useState<number>(2.0);
-
-    const [isScanning, setIsScanning] = useState(false);
-    const [progress, setProgress] = useState('');
+    const [config, setConfig] = useState<ReportConfig>({
+        symbols: [],
+        timeframe: '240',
+        lookback: 500,
+        minZScore: 2.0
+    });
     const [results, setResults] = useState<VolumeEvent[]>([]);
 
+    // --- Local UI State ---
+    const [isScanning, setIsScanning] = useState(false);
+    const [progress, setProgress] = useState('');
+
+    // Pagination
+    const [page, setPage] = useState(1);
+    const [rowsPerPage, setRowsPerPage] = useState(50);
+
+    // Sorting
+    const [sortCol, setSortCol] = useState<keyof VolumeEvent | 'time'>('time');
+    const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+    // Filtering
+    const [filterSymbol, setFilterSymbol] = useState('');
+    const [filterMinZ, setFilterMinZ] = useState<string>(''); // string input
+    const [filterSignal, setFilterSignal] = useState<'all' | 'bullish' | 'bearish'>('all');
+
+    // Load Persistence & Universe on Mount
     useEffect(() => {
-        // Load universe on mount
-        const s = Store.getSymbols().map(d => d.symbol);
-        setSymbols(s);
-        setSelectedSymbols(s); // Default Select All
+        const universe = Store.getSymbols().map(d => d.symbol);
+        setSymbols(universe);
+
+        const savedState = Store.getReportState();
+        if (savedState) {
+            setConfig(savedState.config);
+            setResults(savedState.results);
+        } else {
+            // Initialize default config with all symbols if nothing saved
+            setConfig(prev => ({ ...prev, symbols: universe }));
+        }
     }, []);
+
+    // Save State on Change
+    useEffect(() => {
+        // Only save if we have results or user deliberately changed config
+        // Debounce slightly in real app, but direct save is fine here
+        const state: ReportState = {
+            config,
+            results,
+            lastRun: Date.now()
+        };
+        Store.saveReportState(state);
+    }, [config, results]);
 
     const handleRun = async () => {
         setIsScanning(true);
-        setResults([]);
+        setResults([]); // Clear previous results immediately for feedback
         try {
-            const data = await HistoricalReporter.generateReport({
-                symbols: selectedSymbols,
-                timeframe,
-                lookback,
-                minZScore
-            }, (msg) => setProgress(msg));
+            const data = await HistoricalReporter.generateReport(config, (msg) => setProgress(msg));
             setResults(data);
+            setPage(1); // Reset to page 1
         } catch (e) {
             console.error(e);
         } finally {
@@ -42,12 +76,61 @@ export const Reports: React.FC = () => {
         }
     };
 
-    const handleExport = () => {
-        if (results.length === 0) return;
+    const updateConfig = (key: keyof ReportConfig, value: any) => {
+        setConfig(prev => ({ ...prev, [key]: value }));
+    };
 
-        // CSV Header
+    // --- Data Processing (Memoized) ---
+    const processedData = useMemo(() => {
+        let data = [...results];
+
+        // 1. Filter
+        if (filterSymbol) {
+            data = data.filter(d => d.symbol.toUpperCase().includes(filterSymbol.toUpperCase()));
+        }
+        if (filterMinZ) {
+            const z = parseFloat(filterMinZ);
+            if (!isNaN(z)) {
+                data = data.filter(d => d.zScore >= z);
+            }
+        }
+        if (filterSignal !== 'all') {
+            data = data.filter(d => d.type === filterSignal);
+        }
+
+        // 2. Sort
+        data.sort((a, b) => {
+            let valA = a[sortCol as keyof VolumeEvent];
+            let valB = b[sortCol as keyof VolumeEvent];
+
+            // Handle string comparison
+            if (typeof valA === 'string' && typeof valB === 'string') {
+                return sortDir === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+            }
+            // Handle number comparison
+            return sortDir === 'asc' ? (valA as number) - (valB as number) : (valB as number) - (valA as number);
+        });
+
+        return data;
+    }, [results, filterSymbol, filterMinZ, filterSignal, sortCol, sortDir]);
+
+    // Pagination Logic
+    const totalPages = Math.ceil(processedData.length / rowsPerPage);
+    const paginatedData = processedData.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+
+    const handleSort = (col: keyof VolumeEvent | 'time') => {
+        if (sortCol === col) {
+            setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortCol(col);
+            setSortDir('desc'); // Default to desc for new col
+        }
+    };
+
+    const handleExport = () => {
+        if (processedData.length === 0) return;
         const headers = ['Date', 'Time', 'Symbol', 'Timeframe', 'Type', 'Z-Score', 'Open', 'Close'].join(',');
-        const rows = results.map(ev => {
+        const rows = processedData.map(ev => {
             const date = new Date(ev.time);
             return [
                 date.toLocaleDateString(),
@@ -60,7 +143,6 @@ export const Reports: React.FC = () => {
                 ev.closePrice
             ].join(',');
         });
-
         const csvContent = "data:text/csv;charset=utf-8," + [headers, ...rows].join('\n');
         const encodedUri = encodeURI(csvContent);
         const link = document.createElement("a");
@@ -71,29 +153,28 @@ export const Reports: React.FC = () => {
         document.body.removeChild(link);
     };
 
+    // Helper for Header Sort Icon
+    const SortIcon = ({ col }: { col: string }) => {
+        if (sortCol !== col) return <div className="w-3 h-3" />; // Placeholder
+        return sortDir === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />;
+    };
+
     return (
         <div className="p-6 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-300">
             <div className="flex justify-between items-center border-b border-white/10 pb-4">
                 <h1 className="text-2xl font-mono tracking-wider text-gray-100">HISTORICAL BACKTESTING</h1>
             </div>
 
-            {/* Control Bar */}
-            <div className="bg-surface p-4 rounded-lg border border-white/5 grid grid-cols-1 md:grid-cols-5 gap-4 items-end">
-
-                {/* Symbol Selector */}
+            {/* Persistence / Config Bar */}
+            <div className="bg-surface p-4 rounded-lg border border-white/5 grid grid-cols-1 md:grid-cols-5 gap-4 items-end z-10 relative">
+                {/* Custom Multi Select */}
                 <div className="col-span-2">
-                    <label className="block text-xs uppercase text-gray-400 mb-1">Universe ({selectedSymbols.length}/{symbols.length})</label>
-                    <div className="flex gap-2">
-                        <button
-                            onClick={() => setSelectedSymbols(symbols)}
-                            className="px-2 py-1 bg-white/5 hover:bg-white/10 text-xs rounded border border-white/10"
-                        >
-                            ALL
-                        </button>
-                        <div className="text-xs text-gray-500 py-1.5 px-2 bg-black/20 rounded flex-1 truncate">
-                            {selectedSymbols.length === symbols.length ? 'All Active Symbols' : `${selectedSymbols.length} Selected`}
-                        </div>
-                    </div>
+                    <MultiSelect
+                        options={symbols}
+                        selected={config.symbols}
+                        onChange={(s) => updateConfig('symbols', s)}
+                        label="Universe"
+                    />
                 </div>
 
                 {/* Timeframe */}
@@ -103,10 +184,10 @@ export const Reports: React.FC = () => {
                         {(['30m', '240'] as const).map(tf => (
                             <button
                                 key={tf}
-                                onClick={() => setTimeframe(tf)}
+                                onClick={() => updateConfig('timeframe', tf)}
                                 className={clsx(
                                     "flex-1 px-2 py-1 text-xs font-mono font-bold uppercase rounded transition-colors",
-                                    timeframe === tf ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"
+                                    config.timeframe === tf ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"
                                 )}
                             >
                                 {tf === '240' ? '4H' : tf}
@@ -120,18 +201,18 @@ export const Reports: React.FC = () => {
                     <label className="block text-xs uppercase text-gray-400 mb-1">Lookback & Min Z</label>
                     <div className="flex gap-2">
                         <select
-                            value={lookback}
-                            onChange={(e) => setLookback(Number(e.target.value))}
-                            className="bg-[#121418] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none w-1/2"
+                            value={config.lookback}
+                            onChange={(e) => updateConfig('lookback', Number(e.target.value))}
+                            className="bg-[#121418] border border-white/10 rounded px-2 py-2 text-xs text-white outline-none w-1/2"
                         >
                             <option value={200}>Last 200</option>
                             <option value={500}>Last 500</option>
                             <option value={1000}>Max (1000)</option>
                         </select>
                         <select
-                            value={minZScore}
-                            onChange={(e) => setMinZScore(Number(e.target.value))}
-                            className="bg-[#121418] border border-white/10 rounded px-2 py-1 text-xs text-white outline-none w-1/2"
+                            value={config.minZScore}
+                            onChange={(e) => updateConfig('minZScore', Number(e.target.value))}
+                            className="bg-[#121418] border border-white/10 rounded px-2 py-2 text-xs text-white outline-none w-1/2"
                         >
                             <option value={1.5}>Z &gt; 1.5</option>
                             <option value={2.0}>Z &gt; 2.0</option>
@@ -162,91 +243,187 @@ export const Reports: React.FC = () => {
             )}
             {progress && <div className="text-xs font-mono text-gray-400 text-center">{progress}</div>}
 
-            {/* Export & Results Header */}
+            {/* Results Section */}
             {results.length > 0 && (
-                <div className="flex justify-between items-center">
-                    <h3 className="text-gray-400">Found {results.length} anomalies</h3>
-                    <button onClick={handleExport} className="flex items-center gap-2 text-xs bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded border border-white/10 transition-colors">
-                        <Download size={14} /> Download CSV
-                    </button>
+                <div className="space-y-2">
+                    <div className="flex justify-between items-center text-xs text-gray-400 bg-[#121418] border border-white/10 p-2 rounded">
+                        <div className="flex gap-4">
+                            <span>Found: <strong className="text-white">{results.length}</strong></span>
+                            <span>Showing: <strong className="text-white">{processedData.length}</strong> (filtered)</span>
+                        </div>
+                        <button onClick={handleExport} className="flex items-center gap-2 hover:text-white transition-colors">
+                            <Download size={14} /> Export CSV
+                        </button>
+                    </div>
+
+                    {/* Excel Table */}
+                    <div className="overflow-x-auto bg-surface rounded-lg border border-white/5 shadow-2xl">
+                        <table className="w-full text-left text-sm font-mono">
+                            <thead className="bg-[#121418] text-gray-400 uppercase tracking-wider text-xs border-b border-white/5">
+                                {/* Header Row */}
+                                <tr>
+                                    <th className="p-4 cursor-pointer hover:bg-white/5 w-[180px]" onClick={() => handleSort('time')}>
+                                        <div className="flex items-center gap-1">Time <SortIcon col="time" /></div>
+                                    </th>
+                                    <th className="p-4 cursor-pointer hover:bg-white/5 w-[100px]" onClick={() => handleSort('timeframe')}>
+                                        <div className="flex items-center gap-1">TF <SortIcon col="timeframe" /></div>
+                                    </th>
+                                    <th className="p-4 cursor-pointer hover:bg-white/5 w-[120px]" onClick={() => handleSort('symbol')}>
+                                        <div className="flex items-center gap-1">Symbol <SortIcon col="symbol" /></div>
+                                    </th>
+                                    <th className="p-4 cursor-pointer hover:bg-white/5 w-[120px]" onClick={() => handleSort('type')}>
+                                        <div className="flex items-center gap-1">Signal <SortIcon col="type" /></div>
+                                    </th>
+                                    <th className="p-4 cursor-pointer hover:bg-white/5 w-[100px]" onClick={() => handleSort('zScore')}>
+                                        <div className="flex items-center gap-1">Z-Score <SortIcon col="zScore" /></div>
+                                    </th>
+                                    <th className="p-4 text-right cursor-pointer hover:bg-white/5" onClick={() => handleSort('openPrice')}>
+                                        <div className="flex items-center justify-end gap-1">Open <SortIcon col="openPrice" /></div>
+                                    </th>
+                                    <th className="p-4 text-right cursor-pointer hover:bg-white/5" onClick={() => handleSort('closePrice')}>
+                                        <div className="flex items-center justify-end gap-1">Close <SortIcon col="closePrice" /></div>
+                                    </th>
+                                </tr>
+
+                                {/* Filter Row */}
+                                <tr className="bg-[#121418] border-b border-white/5">
+                                    <td className="p-2 border-r border-white/5"></td> {/* Time */}
+                                    <td className="p-2 border-r border-white/5"></td> {/* TF */}
+                                    <td className="p-2 border-r border-white/5">
+                                        <div className="relative">
+                                            <Filter size={10} className="absolute left-2 top-2.5 text-gray-500" />
+                                            <input
+                                                type="text"
+                                                placeholder="Filter..."
+                                                value={filterSymbol}
+                                                onChange={(e) => setFilterSymbol(e.target.value)}
+                                                className="w-full bg-black/20 border border-white/10 rounded py-1 pl-6 pr-2 text-xs text-white outline-none focus:border-blue-500"
+                                            />
+                                        </div>
+                                    </td>
+                                    <td className="p-2 border-r border-white/5">
+                                        <select
+                                            value={filterSignal}
+                                            onChange={(e) => setFilterSignal(e.target.value as any)}
+                                            className="w-full bg-black/20 border border-white/10 rounded py-1 px-2 text-xs text-white outline-none"
+                                        >
+                                            <option value="all">All</option>
+                                            <option value="bullish">Bullish</option>
+                                            <option value="bearish">Bearish</option>
+                                        </select>
+                                    </td>
+                                    <td className="p-2 border-r border-white/5">
+                                        <div className="flex items-center gap-1">
+                                            <span className="text-gray-500 text-xs">&gt;</span>
+                                            <input
+                                                type="number"
+                                                placeholder="2.0"
+                                                step="0.1"
+                                                value={filterMinZ}
+                                                onChange={(e) => setFilterMinZ(e.target.value)}
+                                                className="w-full bg-black/20 border border-white/10 rounded py-1 px-2 text-xs text-white outline-none focus:border-blue-500"
+                                            />
+                                        </div>
+                                    </td>
+                                    <td className="p-2 border-r border-white/5"></td> {/* Open */}
+                                    <td className="p-2"></td> {/* Close */}
+                                </tr>
+                            </thead>
+
+                            <tbody className="divide-y divide-white/5">
+                                {paginatedData.map((ev, i) => (
+                                    <tr key={ev.id + i} className="hover:bg-white/5 transition-colors">
+                                        <td className="p-4 text-gray-400">
+                                            {new Date(ev.time).toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
+                                        </td>
+                                        <td className="p-4">
+                                            <span className="bg-[#121418] border border-white/10 px-2 py-1 rounded text-xs text-blue-400 font-bold">
+                                                {ev.timeframe === '240' ? '4H' : '30M'}
+                                            </span>
+                                        </td>
+                                        <td className="p-4 font-bold text-gray-200">
+                                            {ev.symbol}
+                                        </td>
+                                        <td className="p-4">
+                                            {ev.type === 'bullish' ? (
+                                                <span className="flex items-center gap-1 text-success bg-success/10 px-2 py-0.5 rounded w-fit">
+                                                    <TrendingUp size={12} /> BULL
+                                                </span>
+                                            ) : (
+                                                <span className="flex items-center gap-1 text-danger bg-danger/10 px-2 py-0.5 rounded w-fit">
+                                                    <TrendingDown size={12} /> BEAR
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className={clsx(
+                                            "p-4 font-bold text-lg",
+                                            ev.zScore > 3.0 ? "text-danger" : "text-warning"
+                                        )}>
+                                            {ev.zScore.toFixed(2)}
+                                        </td>
+                                        <td className="p-4 text-right text-gray-400">
+                                            ${ev.openPrice}
+                                        </td>
+                                        <td className={clsx(
+                                            "p-4 text-right font-bold",
+                                            ev.closePrice > ev.openPrice ? "text-success" : "text-danger"
+                                        )}>
+                                            ${ev.closePrice}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {/* Pagination Footer */}
+                    <div className="flex justify-between items-center bg-[#121418] rounded-lg p-2 border border-white/5">
+                        <div className="flex items-center gap-4 text-xs text-gray-400">
+                            <span>Rows per page:</span>
+                            <select
+                                value={rowsPerPage}
+                                onChange={(e) => {
+                                    setRowsPerPage(Number(e.target.value));
+                                    setPage(1);
+                                }}
+                                className="bg-black/20 border border-white/10 rounded px-2 py-1 outline-none text-white"
+                            >
+                                <option value={25}>25</option>
+                                <option value={50}>50</option>
+                                <option value={100}>100</option>
+                            </select>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-400">
+                                Page {page} of {totalPages || 1}
+                            </span>
+                            <div className="flex gap-1">
+                                <button
+                                    onClick={() => {
+                                        setPage(p => Math.max(1, p - 1));
+                                        window.scrollTo({ top: 0, behavior: 'smooth' }); // As requested
+                                    }}
+                                    disabled={page === 1}
+                                    className="p-1 hover:bg-white/10 rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                                >
+                                    <ChevronLeft size={16} />
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setPage(p => Math.min(totalPages, p + 1));
+                                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                                    }}
+                                    disabled={page >= totalPages}
+                                    className="p-1 hover:bg-white/10 rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                                >
+                                    <ChevronRight size={16} />
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
-
-            {/* Results Table (Strict Layout) */}
-            <div className="overflow-x-auto bg-surface rounded-lg border border-white/5 shadow-2xl">
-                <table className="w-full text-left text-sm font-mono">
-                    <thead className="bg-[#121418] text-gray-400 uppercase tracking-wider text-xs border-b border-white/5">
-                        <tr>
-                            <th className="p-4">Time</th>
-                            <th className="p-4">Timeframe</th>
-                            <th className="p-4">Symbol</th>
-                            <th className="p-4">Signal</th>
-                            <th className="p-4">Z-Score</th>
-                            <th className="p-4 text-right">Open</th>
-                            <th className="p-4 text-right">Close</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5">
-                        {results.map((ev, i) => (
-                            <tr key={i} className="hover:bg-white/5 transition-colors">
-                                {/* Time (Full) */}
-                                <td className="p-4 text-gray-400">
-                                    {new Date(ev.time).toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
-                                </td>
-
-                                {/* Timeframe */}
-                                <td className="p-4">
-                                    <span className="bg-[#121418] border border-white/10 px-2 py-1 rounded text-xs text-blue-400 font-bold">
-                                        {ev.timeframe === '240' ? '4H' : '30M'}
-                                    </span>
-                                </td>
-
-                                {/* Symbol */}
-                                <td className="p-4 font-bold text-gray-200">
-                                    {ev.symbol}
-                                </td>
-
-                                {/* Signal */}
-                                <td className="p-4">
-                                    {ev.type === 'bullish' ? (
-                                        <span className="flex items-center gap-1 text-success bg-success/10 px-2 py-0.5 rounded w-fit">
-                                            <TrendingUp size={12} /> BULL
-                                        </span>
-                                    ) : (
-                                        <span className="flex items-center gap-1 text-danger bg-danger/10 px-2 py-0.5 rounded w-fit">
-                                            <TrendingDown size={12} /> BEAR
-                                        </span>
-                                    )}
-                                </td>
-
-                                {/* Z-Score */}
-                                <td className={clsx(
-                                    "p-4 font-bold text-lg",
-                                    ev.zScore > 3.0 ? "text-danger" : "text-warning"
-                                )}>
-                                    {ev.zScore.toFixed(2)}
-                                </td>
-
-                                {/* Open */}
-                                <td className="p-4 text-right text-gray-400">
-                                    ${ev.openPrice}
-                                </td>
-
-                                {/* Close */}
-                                <td className={clsx(
-                                    "p-4 text-right font-bold",
-                                    ev.closePrice > ev.openPrice ? "text-success" : "text-danger"
-                                )}>
-                                    ${ev.closePrice}
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-                {results.length === 0 && !isScanning && (
-                    <div className="p-10 text-center text-gray-500 italic">No reports generated. Select parameters and click Generate.</div>
-                )}
-            </div>
         </div>
     );
 };

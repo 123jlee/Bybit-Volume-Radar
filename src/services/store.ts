@@ -1,5 +1,5 @@
 import { DEFAULT_SETTINGS } from '../types';
-import type { AppSettings, SymbolData, VolumeEvent } from '../types';
+import type { AppSettings, SymbolData, VolumeEvent, ReportState } from '../types';
 
 type Listener = () => void;
 
@@ -90,6 +90,20 @@ class StoreService {
 
     private notify() {
         this.listeners.forEach(l => l());
+    }
+
+    // Report Persistence
+    public getReportState(): ReportState | null {
+        try {
+            const saved = localStorage.getItem('bvr_report_state');
+            return saved ? JSON.parse(saved) : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    public saveReportState(state: ReportState) {
+        localStorage.setItem('bvr_report_state', JSON.stringify(state));
     }
 }
 

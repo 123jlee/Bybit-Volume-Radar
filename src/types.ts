@@ -49,3 +49,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
     minZScore: 2.0, // Default to a reasonable "Strong" threshold
     soundEnabled: true,
 };
+
+export interface ReportConfig {
+    symbols: string[];
+    timeframe: Timeframe;
+    lookback: number;
+    minZScore: number;
+}
+
+export interface ReportState {
+    config: ReportConfig;
+    results: VolumeEvent[];
+    lastRun: number;
+}
