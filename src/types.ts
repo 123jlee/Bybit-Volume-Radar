@@ -13,12 +13,12 @@ export interface VolumeEvent {
     id: string; // unique ID
     symbol: string;
     timeframe: Timeframe;
-    time: number; // candle timestamp
-    type: 'impulse_up' | 'impulse_down' | 'rejection' | 'doji';
-    severity: 'mild' | 'strong' | 'climactic';
-    price: number;
-    volumeRatio: number; // current vol / avg vol
+    time: number; // candle OPEN time
+    type: 'bullish' | 'bearish';
+    severity: 'medium' | 'high';
     zScore: number;
+    openPrice: number;
+    closePrice: number;
 }
 
 export interface SymbolData {

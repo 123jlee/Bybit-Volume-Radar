@@ -10,10 +10,8 @@ export class ScannerEngine {
         if (this.isScanning) return;
         this.isScanning = true;
         this.runLoop();
-        // Re-run every 60 seconds? Or continuous loop with delays?
-        // User asked for specific batching. 
-        // Let's make it a continuous loop that sleeps between cycles.
-        this.intervalId = setInterval(() => this.runLoop(), 30000); // Poll every 30s roughly
+        // Poll every 30s
+        this.intervalId = setInterval(() => this.runLoop(), 30000);
     }
 
     public stop() {
@@ -26,21 +24,14 @@ export class ScannerEngine {
         const symbols = Store.getSymbols();
 
         if (symbols.length === 0) {
-            // Try to discover
             console.log('Universe empty, fetching top symbols...');
             const newSymbols = await BybitService.fetchMarketUniverse(settings);
             Store.updateSymbols(newSymbols);
             return;
         }
 
-        // Refresh Universe periodically? Or just assumes Universe is static per session unless manually refreshed.
-        // User requirement: "On startup, fetch... Universe page toggles". 
-        // We'll stick to scanning the active list.
-
-        // Batching
         const BATCH_SIZE = 3;
 
-        // We will loop through ALL symbols in the store.
         for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
             const batch = symbols.slice(i, i + BATCH_SIZE);
 
@@ -48,18 +39,13 @@ export class ScannerEngine {
                 await this.scanSymbol(symbolData.symbol, settings);
             }));
 
-            // Small delay between batches to be nice to API/Browser
             await new Promise(res => setTimeout(res, 500));
         }
-
-        // Update store last updated
-        Store.updateSymbols(Store.getSymbols()); // Just to trigger "Last Updated" if we wanted to be granular, but Store has lastUpdate
     }
 
     private async scanSymbol(symbol: string, settings: AppSettings) {
-        // We need 30m and 4h (240)
-        // We fetch enough for Z-Score (20 period default)
-        const LOOKBACK = 25;
+        // 1. Fetch 100 candles (needed for EMA warm-up)
+        const LOOKBACK = 100;
 
         try {
             const [candles30m, candles4h] = await Promise.all([
@@ -67,12 +53,11 @@ export class ScannerEngine {
                 BybitService.fetchCandles(symbol, '240', LOOKBACK, settings.apiEndpoint)
             ]);
 
-            // Update Store with new candles so UI can show sparklines immediately
+            // Update Store
             const currentData = Store.getSymbol(symbol);
             if (currentData) {
                 currentData.candles['30m'] = candles30m;
                 currentData.candles['240'] = candles4h;
-                // Update price from latest candle?
                 if (candles30m.length > 0) {
                     currentData.price = candles30m[candles30m.length - 1].close;
                 }
@@ -88,89 +73,100 @@ export class ScannerEngine {
         }
     }
 
-    private analyze(symbol: string, timeframe: Timeframe, candles: OHLCV[], settings: AppSettings) {
-        if (candles.length < 20) return; // Not enough data
+    private calculateStatistics(candles: OHLCV[], period: number = 21) {
+        // Need at least period + a few candles
+        if (candles.length < period + 10) return null;
 
-        const current = candles[candles.length - 1]; // Developing candle
+        // Extract volumes
+        const volumes = candles.map(c => c.volume);
 
-        // We compare current volume to Average of last N (excluding current)
-        const history = candles.slice(0, candles.length - 1).slice(-20); // Last 20 closed
-        if (history.length === 0) return;
-
-        // 1. Volume Ratio
-        const avgVol = history.reduce((sum, c) => sum + c.volume, 0) / history.length;
-        if (avgVol === 0) return;
-        const volRatio = current.volume / avgVol;
-
-        // 2. Z-Score (Volume)
-        // Mean is avgVol
-        const variance = history.reduce((sum, c) => sum + Math.pow(c.volume - avgVol, 2), 0) / history.length;
-        const stdDev = Math.sqrt(variance);
-        const zScore = stdDev === 0 ? 0 : (current.volume - avgVol) / stdDev;
-
-        // Check Thresholds
-        const isVolSpike = volRatio >= settings.minVolumeRatio;
-        const isZScoreSpike = zScore >= settings.minZScore;
-
-        if (isVolSpike || isZScoreSpike) {
-            // DETECTED!
-
-            // Classify Type
-            let type: VolumeEvent['type'] = 'doji';
-            const bodySize = Math.abs(current.close - current.open);
-            const candleRange = current.high - current.low;
-            const upperWick = current.high - Math.max(current.open, current.close);
-            const lowerWick = Math.min(current.open, current.close) - current.low;
-
-            if (bodySize < candleRange * 0.1) {
-                type = 'doji';
-            } else if (current.close > current.open) {
-                type = 'impulse_up';
-                // Check for rejection? (Long upper wick on a green candle is rare but possible, usually 'rejection' implies fail to go up)
-                if (upperWick > bodySize * 2) type = 'rejection';
-            } else {
-                type = 'impulse_down';
-                if (lowerWick > bodySize * 2) type = 'rejection'; // Rejection from lows
+        // Function to calculate EMA
+        const calculateEMA = (values: number[], days: number) => {
+            const k = 2 / (days + 1);
+            let ema = values[0];
+            for (let i = 1; i < values.length; i++) {
+                ema = values[i] * k + ema * (1 - k);
             }
+            return ema;
+        };
 
-            // Classify Severity
-            let severity: VolumeEvent['severity'] = 'mild';
-            if (zScore > 4.0 || volRatio > 5.0) severity = 'climactic';
-            else if (zScore > 3.0 || volRatio > 3.0) severity = 'strong';
+        // Function to calculate StdDev (Simple) of the last N items
+        const calculateStdDev = (values: number[], mean: number) => {
+            const squareDiffs = values.map(value => Math.pow(value - mean, 2));
+            const avgSquareDiff = squareDiffs.reduce((a, b) => a + b, 0) / values.length;
+            return Math.sqrt(avgSquareDiff);
+        };
 
-            // Create Event
+        // We want the EMA/StdDev of the HISTORY (excluding current developing candle)
+        // candles[0] is oldest, candles[last] is current (developing)
+        // wait, BybitService returns oldest -> newest. Correct.
+        // So history is candles.slice(0, -1).
+
+        const historyVectors = volumes.slice(0, -1);
+
+        // Calculate EMA on the full history to let it stabilize
+        // We take the LAST calculated EMA value as our baseline
+        const ema = calculateEMA(historyVectors, period);
+
+        // Calculate StdDev on the recent window (last 21 of history)
+        const recentHistory = historyVectors.slice(-period);
+        const stdDev = calculateStdDev(recentHistory, ema); // StdDev around the EMA? Or around simple Mean?
+        // Standard Bollinger Band / Z-Score uses Simple Moving Average for StdDev usually.
+        // But prompt says "EMA(21) / StdDev(21)". 
+        // Let's use StdDev relative to the EMA for "deviation from trend".
+
+        return { ema, stdDev };
+    }
+
+    private analyze(symbol: string, timeframe: Timeframe, candles: OHLCV[], settings: AppSettings) {
+        if (candles.length < 50) return;
+
+        const current = candles[candles.length - 1]; // Developing
+        const stats = this.calculateStatistics(candles, 21);
+
+        if (!stats || stats.stdDev === 0) return;
+
+        // Formula: (Current Volume - EMA(21)) / StdDev(21)
+        const zScore = (current.volume - stats.ema) / stats.stdDev;
+
+        // Filter Criteria: Keep symbol IF Z-Score > 2.0 (or settings.minZScore)
+        // Prompt says "Filter Criteria: Keep symbol IF Z-Score > 2.0"
+        // We should respect settings if possible, but the prompt gave specific constraints.
+        // "Tagging: Medium > 2.0, High > 3.0"
+        // Let's use the explicit prompt rules, but default to settings if higher? 
+        // Let's stick to prompt "Z-Score > 2.0".
+
+        if (zScore > 2.0) {
+            // Classification
+            const severity: VolumeEvent['severity'] = zScore > 3.0 ? 'high' : 'medium';
+
+            const isGreen = current.close >= current.open;
+            const type: VolumeEvent['type'] = isGreen ? 'bullish' : 'bearish';
+
             const event: VolumeEvent = {
                 id: `${symbol}-${timeframe}-${current.time}`,
                 symbol,
                 timeframe,
-                time: current.time,
+                time: current.time, // Open time
                 type,
                 severity,
-                price: current.close,
-                volumeRatio: parseFloat(volRatio.toFixed(2)),
-                zScore: parseFloat(zScore.toFixed(2))
+                zScore: parseFloat(zScore.toFixed(2)),
+                openPrice: current.open,
+                closePrice: current.close
             };
 
-            // Add to store (Store handles de-duplication if needed, but here ID helps)
-            // We only invite NEW events. Be careful not to spam events for the same candle every polling cycle.
-            // Store logic: Check if ID exists?
-            // For now, let's just let the Store add it.
-            // Optimization: Only add if this detected event is "better" or update existing?
-            // A simple check:
             const existing = Store.getEvents().find(e => e.id === event.id);
             if (!existing) {
                 Store.addEvent(event);
-                if (settings.soundEnabled && (severity === 'strong' || severity === 'climactic')) {
+                if (settings.soundEnabled && severity === 'high') {
                     this.playPing();
                 }
-                // Update Title
                 document.title = `(${Store.getEvents().length}) Vol. Radar`;
             }
         }
     }
 
     private playPing() {
-        // Simple beep
         try {
             const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
             const osc = ctx.createOscillator();
@@ -181,9 +177,7 @@ export class ScannerEngine {
             gain.gain.value = 0.1;
             osc.start();
             setTimeout(() => osc.stop(), 200);
-        } catch (e) {
-            // Ignore audio errors
-        }
+        } catch (e) { }
     }
 }
 

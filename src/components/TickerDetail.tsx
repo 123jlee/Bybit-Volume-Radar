@@ -137,9 +137,9 @@ export const TickerDetail: React.FC<TickerDetailProps> = ({ symbol, onBack }) =>
                                         <span>{new Date(ev.time).toLocaleTimeString()}</span>
                                         <span className="uppercase">{ev.timeframe === '240' ? '4H' : '30M'}</span>
                                     </div>
-                                    <div className="font-bold text-gray-200">{ev.type.replace('_', ' ')}</div>
+                                    <div className="font-bold text-gray-200 capitalize">{ev.type}</div>
                                     <div className="text-xs text-gray-400 mt-1">
-                                        Vol Ratio: <span className="text-gray-200">{ev.volumeRatio}x</span>
+                                        Z-Score: <span className={ev.zScore > 3 ? "text-danger" : "text-warning"}>{ev.zScore}</span>
                                     </div>
                                 </div>
                             ))
