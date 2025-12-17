@@ -1,31 +1,46 @@
-# Bybit Volume Radar (VPS Edition)
+# Bybit Volume Radar (Tactical Stream Edition)
 
-A high-performance, client-side scanner that monitors **Bybit USDT Perpetual Futures** for anomalous volume spikes. Built with React 19, TypeScript, and Tailwind CSS.
+A high-performance, client-side tactical scanner that monitors **Bybit USDT Perpetual Futures** for anomalous volume spikes. Re-engineered as a live tactical stream with historical backfill replay.
 
-![Status](https://img.shields.io/badge/Status-Active-success) ![License](https://img.shields.io/badge/License-MIT-blue)
+![Status](https://img.shields.io/badge/Status-Active-success) ![License](https://img.shields.io/badge/License-MIT-blue) ![Tech](https://img.shields.io/badge/Tech-React_19_|_Vite_|_Tailwind-purple)
 
-## 🚀 Features
+## 🚀 Key Features
 
-### Core Scanner
-- **Multi-Timeframe Analysis**: Scans **30m** and **4H** timeframes simultaneously.
-- **Anomaly Detection**: Uses **Volume Ratio** (vs 20-period avg) and **Z-Score** to detect statistical outliers.
-- **Severity Grading**: Classifies events as **Mild**, **Strong**, or **Climactic**.
-- **Batch Processing**: Scans symbols in chunks to prevent API rate limits.
+### 1. Tactical Stream Dashboard
+The core of the application has been overhauled into a **Session-Based Live Stream**.
+-   **Historical Replay (Backfill)**: On "START", the engine fetches the last **100 candles (5m)** for the entire universe and replays history to detect anomalies that occurred in the last ~8 hours.
+-   **Live Polling**: After backfill, the scanner polls every **60s** to append the latest anomalies to the feed.
+-   **View Filters**: Toggle visibility for **[ 5m ]** and **[ 30m ]** signals independently.
+-   **Precision Timing**: Toggle between **[ UTC ]** and **[ LOCAL ]** time.
+-   **Smart Pagination**: Client-side pagination handles large event feeds (1000+ rows) with ease.
+-   **Context-Aware**: Dashboard timer and state persist across navigation (`ScannerContext`).
 
-### Terminal UI
-- **Dashboard**: Real-time event feed with 20-candle sparklines and audio alerts.
-- **Ticker Detail**: Deep dive into specific symbols with interactive Price/Volume charts.
-- **Universe Manager**: Auto-discovers Top 25/50 symbols by **Volume** or **Open Interest**.
+### 2. Advanced Reports
+-   **Persistence**: Report configuration and results are saved to LocalStorage—never lose your analysis on refresh.
+-   **Multi-Select**: Filter reports by multiple specific symbols.
+-   **Interactive Table**: Sortable columns, filtration, and pagination for deep-diving into historical data.
 
-### VPS Ready
-- **Simple Architecture**: Static frontend + Nginx Reverse Proxy (no heavy backend).
-- **Persistence**: Settings (Thresholds, API Config) saved to LocalStorage.
+### 3. Universe Manager
+-   **Auto-Discovery**: Automatically fetches the Top 25/50 symbols by **Volume** or **Open Interest**.
+-   **Dynamic List**: The scanner adapts to market shifts automatically.
+
+---
+
+## 🏗️ Architecture
+
+The app runs entirely in the browser (Client-Side), using **Nginx** only as a reverse proxy to bypass CORS.
+
+-   **Scanner Engine**: A dedicated class that manages polling loops, backfill logic, and Z-Score calculation.
+-   **State Management**: `StoreService` (Observer Pattern) + `ScannerContext` (React Context) ensures efficient data flow.
+-   **Persistence**: `localStorage` helps retain Universe, Settings, and Reports between sessions.
+
+### Limits
+-   **Feed Capacity**: Rolling limit of **1000** events to prevent memory leaks during long sessions.
+-   **Backfill Depth**: Scans last 100 candles (approx 8 hours on 5m timeframe).
 
 ---
 
 ## 🛠️ Local Development
-
-The project uses Vite with a local proxy to bypass CORS during development.
 
 1. **Install Dependencies**
    ```bash
@@ -36,54 +51,39 @@ The project uses Vite with a local proxy to bypass CORS during development.
    ```bash
    npm run dev
    ```
-   > Access at `http://localhost:5173`
-   > Requests to `/bybit_api` are proxied to `https://api.bybit.com` automatically.
+   > Access at `http://localhost:5173`.
+   > Requests to `/bybit_api` are proxied to `https://api.bybit.com` via Vite config.
 
 ---
 
-## 📦 VPS Deployment (Nginx)
+## 📦 VPS Deployment
 
-This guide assumes a fresh Ubuntu VPS with an `admin` user.
+Deploying to a Linux VPS (Ubuntu recommended) is automated via the included script.
 
-### 1. Build the App
-Generate the production static files:
+### 1. Build
 ```bash
 npm run build
 ```
 
-### 2. Upload to VPS
-Transfer the build files, Nginx config, and setup script to your VPS:
+### 2. Upload
+Transfer the `dist/` folder and setup scripts to your VPS user (e.g., `admin`).
 ```bash
-# Upload build artifacts
-ssh admin@<VPS_IP> "mkdir -p ~/bybit-radar"
+# Example
 scp -r dist/* admin@<VPS_IP>:~/bybit-radar/
-
-# Upload config & script (found in root)
 scp bybit-radar.conf setup.sh admin@<VPS_IP>:~/bybit-radar/
 ```
 
-### 3. Run Setup Script
-SSH into your VPS and run the automated installer. This handles Nginx installation, permission setting (to `/var/www`), and port configuration.
-
+### 3. Run Setup
+SSH into the VPS and run the script. It configures Nginx to serve the app on port **8080**.
 ```bash
 ssh admin@<VPS_IP>
 sudo bash ~/bybit-radar/setup.sh
 ```
 
-**That's it!** Your scanner is now running at `http://<VPS_IP>:8080`.
-
 ---
 
-## ⚙️ Configuration
+## ⚙️ Configuration (Settings Page)
 
-Customization is available directly in the **Settings** page:
-
-- **API Endpoint**: Defaults to `/bybit_api` (relative path for Nginx proxy).
-- **Symbol Count**: track Top 10, 25, or 50 pairs.
-- **Sort Criteria**: Rank universe by 24h Volume or Open Interest.
-- **Thresholds**: Adjust Sensitivity (Min Volume Ratio, Min Z-Score).
-
-## 🛡️ Troubleshooting
-
-- **500 Error**: Usually permissions. Ensure files are in `/var/www/bybit-radar` and owned by `www-data`. The provided `setup.sh` handles this.
-- **CORS Error**: Ensure you are accessing via the Nginx port (8080), not opening `index.html` locally file://.
+-   **Symbol Count**: Track Top 10, 25, or 50 pairs.
+-   **Sort Criteria**: Rank universe by 24h Volume or Open Interest.
+-   **Audio Alerts**: Toggle sound on strictly "High Severity" (Z > 3.0) events.
