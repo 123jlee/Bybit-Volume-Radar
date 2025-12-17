@@ -1,86 +1,89 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Activity, Settings as SettingsIcon, Globe, BarChart2 } from 'lucide-react';
+import { Scanner } from './services/scanner';
 import { Dashboard } from './components/Dashboard';
+import { TickerDetail } from './components/TickerDetail';
 import { Settings } from './components/Settings';
 import { Universe } from './components/Universe';
-import { TickerDetail } from './components/TickerDetail';
-import { Scanner } from './services/scanner';
-import { LayoutDashboard, Globe, Settings as SettingsIcon, Radio } from 'lucide-react';
+import { Reports } from './components/Reports';
 
-type View = 'dashboard' | 'universe' | 'settings' | 'ticker';
+type View = 'dashboard' | 'ticker' | 'settings' | 'universe' | 'reports';
 
-function App() {
-  const [currentView, setCurrentView] = useState<View>('dashboard');
-  const [selectedTicker, setSelectedTicker] = useState<string>('');
+const App: React.FC = () => {
+  const [view, setView] = useState<View>('dashboard');
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
 
   useEffect(() => {
     // Start Scanner on Mount
     Scanner.start();
-    return () => {
-      Scanner.stop();
-    };
+    return () => Scanner.stop();
   }, []);
 
-  const navigateToTicker = (symbol: string) => {
+  const handleSelectTicker = (symbol: string) => {
     setSelectedTicker(symbol);
-    setCurrentView('ticker');
+    setView('ticker');
   };
 
   const renderView = () => {
-    switch (currentView) {
-      case 'dashboard': return <Dashboard onSelectTicker={navigateToTicker} />;
-      case 'universe': return <Universe />;
+    switch (view) {
+      case 'dashboard': return <Dashboard onSelectTicker={handleSelectTicker} />;
+      case 'ticker': return selectedTicker ? <TickerDetail symbol={selectedTicker} onBack={() => setView('dashboard')} /> : <Dashboard onSelectTicker={handleSelectTicker} />;
       case 'settings': return <Settings />;
-      case 'ticker': return <TickerDetail symbol={selectedTicker} onBack={() => setCurrentView('dashboard')} />;
-      default: return <Dashboard onSelectTicker={navigateToTicker} />;
+      case 'universe': return <Universe />;
+      case 'reports': return <Reports />;
+      default: return <Dashboard onSelectTicker={handleSelectTicker} />;
     }
   };
 
   return (
-    <div className="flex h-screen bg-background text-gray-200 font-sans selection:bg-blue-500/30">
-      {/* Sidebar Navigation */}
-      <nav className="w-16 md:w-20 bg-[#0a0c10] border-r border-white/5 flex flex-col items-center py-6 gap-8 z-50">
-        <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-900/20">
-          <Radio className="text-white w-6 h-6" />
+    <div className="flex min-h-screen bg-background text-text-primary font-sans antialiased selection:bg-blue-500/30">
+      {/* Sidebar */}
+      <div className="w-16 md:w-20 bg-surface border-r border-white/5 flex flex-col items-center py-6 gap-6 z-50">
+        <div className="w-10 h-10 bg-blue-600 rounded flex items-center justify-center text-white font-bold mb-4 shadow-lg shadow-blue-500/20">
+          VR
         </div>
 
-        <div className="flex flex-col gap-6 w-full px-2">
-          <NavIcon
-            active={currentView === 'dashboard'}
-            onClick={() => setCurrentView('dashboard')}
-            icon={<LayoutDashboard size={20} />}
-            label="Dash"
-          />
-          <NavIcon
-            active={currentView === 'universe'}
-            onClick={() => setCurrentView('universe')}
-            icon={<Globe size={20} />}
-            label="Univ"
-          />
-          <NavIcon
-            active={currentView === 'settings'}
-            onClick={() => setCurrentView('settings')}
-            icon={<SettingsIcon size={20} />}
-            label="Conf"
-          />
-        </div>
-      </nav>
+        <button
+          onClick={() => setView('dashboard')}
+          className={`p-3 rounded-lg transition-all ${view === 'dashboard' || view === 'ticker' ? 'bg-white/10 text-blue-400' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}
+          title="Dashboard"
+        >
+          <Activity size={24} />
+        </button>
 
-      {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto relative">
+        <button
+          onClick={() => setView('universe')}
+          className={`p-3 rounded-lg transition-all ${view === 'universe' ? 'bg-white/10 text-blue-400' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}
+          title="Universe"
+        >
+          <Globe size={24} />
+        </button>
+
+        <button
+          onClick={() => setView('reports')}
+          className={`p-3 rounded-lg transition-all ${view === 'reports' ? 'bg-white/10 text-blue-400' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}
+          title="Backtesting Reports"
+        >
+          <BarChart2 size={24} />
+        </button>
+
+        <div className="flex-1" />
+
+        <button
+          onClick={() => setView('settings')}
+          className={`p-3 rounded-lg transition-all ${view === 'settings' ? 'bg-white/10 text-blue-400' : 'text-gray-500 hover:text-white hover:bg-white/5'}`}
+          title="Settings"
+        >
+          <SettingsIcon size={24} />
+        </button>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 overflow-y-auto h-screen relative scrollbar-hide">
         {renderView()}
-      </main>
+      </div>
     </div>
   );
-}
-
-const NavIcon = ({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) => (
-  <button
-    onClick={onClick}
-    className={`group flex flex-col items-center gap-1 w-full p-2 rounded-lg transition-all duration-200 ${active ? 'bg-white/10 text-blue-400' : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'}`}
-  >
-    {icon}
-    <span className="text-[10px] font-mono uppercase tracking-wider">{label}</span>
-  </button>
-);
+};
 
 export default App;

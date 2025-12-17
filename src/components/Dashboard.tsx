@@ -102,7 +102,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
                             >
                                 {/* Col 1: Time */}
                                 <td className="p-4 text-gray-400">
-                                    {new Date(ev.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    {new Date(ev.time).toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
                                 </td>
 
                                 {/* Col 2: Timeframe Badge */}
