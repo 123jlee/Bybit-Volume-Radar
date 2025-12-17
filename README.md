@@ -1,73 +1,89 @@
-# React + TypeScript + Vite
+# Bybit Volume Radar (VPS Edition)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A high-performance, client-side scanner that monitors **Bybit USDT Perpetual Futures** for anomalous volume spikes. Built with React 19, TypeScript, and Tailwind CSS.
 
-Currently, two official plugins are available:
+![Status](https://img.shields.io/badge/Status-Active-success) ![License](https://img.shields.io/badge/License-MIT-blue)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## 🚀 Features
 
-## React Compiler
+### Core Scanner
+- **Multi-Timeframe Analysis**: Scans **30m** and **4H** timeframes simultaneously.
+- **Anomaly Detection**: Uses **Volume Ratio** (vs 20-period avg) and **Z-Score** to detect statistical outliers.
+- **Severity Grading**: Classifies events as **Mild**, **Strong**, or **Climactic**.
+- **Batch Processing**: Scans symbols in chunks to prevent API rate limits.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Terminal UI
+- **Dashboard**: Real-time event feed with 20-candle sparklines and audio alerts.
+- **Ticker Detail**: Deep dive into specific symbols with interactive Price/Volume charts.
+- **Universe Manager**: Auto-discovers Top 25/50 symbols by **Volume** or **Open Interest**.
 
-## Expanding the ESLint configuration
+### VPS Ready
+- **Simple Architecture**: Static frontend + Nginx Reverse Proxy (no heavy backend).
+- **Persistence**: Settings (Thresholds, API Config) saved to LocalStorage.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+---
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## 🛠️ Local Development
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+The project uses Vite with a local proxy to bypass CORS during development.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+1. **Install Dependencies**
+   ```bash
+   npm install
+   ```
+
+2. **Start Dev Server**
+   ```bash
+   npm run dev
+   ```
+   > Access at `http://localhost:5173`
+   > Requests to `/bybit_api` are proxied to `https://api.bybit.com` automatically.
+
+---
+
+## 📦 VPS Deployment (Nginx)
+
+This guide assumes a fresh Ubuntu VPS with an `admin` user.
+
+### 1. Build the App
+Generate the production static files:
+```bash
+npm run build
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### 2. Upload to VPS
+Transfer the build files, Nginx config, and setup script to your VPS:
+```bash
+# Upload build artifacts
+ssh admin@<VPS_IP> "mkdir -p ~/bybit-radar"
+scp -r dist/* admin@<VPS_IP>:~/bybit-radar/
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# Upload config & script (found in root)
+scp bybit-radar.conf setup.sh admin@<VPS_IP>:~/bybit-radar/
 ```
+
+### 3. Run Setup Script
+SSH into your VPS and run the automated installer. This handles Nginx installation, permission setting (to `/var/www`), and port configuration.
+
+```bash
+ssh admin@<VPS_IP>
+sudo bash ~/bybit-radar/setup.sh
+```
+
+**That's it!** Your scanner is now running at `http://<VPS_IP>:8080`.
+
+---
+
+## ⚙️ Configuration
+
+Customization is available directly in the **Settings** page:
+
+- **API Endpoint**: Defaults to `/bybit_api` (relative path for Nginx proxy).
+- **Symbol Count**: track Top 10, 25, or 50 pairs.
+- **Sort Criteria**: Rank universe by 24h Volume or Open Interest.
+- **Thresholds**: Adjust Sensitivity (Min Volume Ratio, Min Z-Score).
+
+## 🛡️ Troubleshooting
+
+- **500 Error**: Usually permissions. Ensure files are in `/var/www/bybit-radar` and owned by `www-data`. The provided `setup.sh` handles this.
+- **CORS Error**: Ensure you are accessing via the Nginx port (8080), not opening `index.html` locally file://.
