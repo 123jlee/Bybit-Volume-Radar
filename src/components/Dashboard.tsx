@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Store } from '../services/store';
-import { Scanner } from '../services/scanner';
+import { useScanner } from '../contexts/ScannerContext';
 import type { VolumeEvent } from '../types';
-import { PlayCircle, StopCircle, TrendingUp, TrendingDown, Clock, Activity } from 'lucide-react';
+import { PlayCircle, StopCircle, TrendingUp, TrendingDown, Clock, Activity, Eye, EyeOff } from 'lucide-react';
 import clsx from 'clsx';
 import { formatTime } from '../utils/date';
 
@@ -11,48 +11,43 @@ interface DashboardProps {
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
+    const { isScanning, nextUpdate, startScanner, stopScanner } = useScanner();
+
+    // Data State
     const [events, setEvents] = useState<VolumeEvent[]>([]);
-    const [isScanning, setIsScanning] = useState(false);
+
+    // View State
     const [useUTC, setUseUTC] = useState(true);
-    const [nextUpdate, setNextUpdate] = useState(60);
+    const [show5m, setShow5m] = useState(true);
+    const [show30m, setShow30m] = useState(true);
 
     useEffect(() => {
-        // 1. Subscribe to Store updates
+        // Subscribe to Store
         const unsubscribe = Store.subscribe(() => {
-            setEvents([...Store.getEvents()]); // Create copy to force re-render
+            setEvents([...Store.getEvents()]);
         });
-
-        // 2. Initial State
         setEvents(Store.getEvents());
-        setIsScanning(Scanner.getStatus());
-
-        // 3. Status Poll (for countdown / status) (Optional visual flair)
-        const statusInterval = setInterval(() => {
-            const active = Scanner.getStatus();
-            setIsScanning(active);
-            if (active) {
-                setNextUpdate(prev => (prev > 0 ? prev - 1 : 60));
-            } else {
-                setNextUpdate(60);
-            }
-        }, 1000);
-
-        return () => {
-            unsubscribe();
-            clearInterval(statusInterval);
-        };
+        return () => unsubscribe();
     }, []);
 
     const toggleScanner = () => {
         if (isScanning) {
-            Scanner.stop();
-            setIsScanning(false);
+            stopScanner();
         } else {
-            Scanner.start();
-            setIsScanning(true);
-            setNextUpdate(60);
+            startScanner();
         }
     };
+
+    // Filter Logic
+    const filteredEvents = events.filter(ev => {
+        if (ev.timeframe === '5m' && !show5m) return false;
+        if (ev.timeframe === '30m' && !show30m) return false;
+        // Also handle 4h if it exists in legacy data, though we focused on 5m/30m now
+        if (ev.timeframe === '240' && !show30m) return false; // Group 4h with 30m toggle or hide? Let's just filter based on TF.
+        // If user wants 4H, they probably want it shown if 30m is enabled or add new toggle. 
+        // User asked for [5m] [30m] toggles.
+        return true;
+    });
 
     return (
         <div className="p-6 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-300">
@@ -64,10 +59,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
             </div>
 
             {/* Control Bar (Header) */}
-            <div className="bg-[#121418] p-4 rounded-lg border border-white/10 flex flex-col md:flex-row justify-between items-center gap-4 shadow-xl">
+            <div className="bg-[#121418] p-4 rounded-lg border border-white/10 flex flex-col xl:flex-row justify-between items-center gap-4 shadow-xl">
 
                 {/* Left: Start/Stop & Status */}
-                <div className="flex items-center gap-6 w-full md:w-auto">
+                <div className="flex items-center gap-6 w-full xl:w-auto justify-between xl:justify-start">
                     <button
                         onClick={toggleScanner}
                         className={clsx(
@@ -89,8 +84,31 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
                     </div>
                 </div>
 
+                {/* Center: View Filters (5m / 30m) */}
+                <div className="flex items-center gap-3 bg-black/20 p-1.5 rounded-lg border border-white/5 order-3 xl:order-2 w-full xl:w-auto justify-center">
+                    <span className="text-xs text-gray-500 font-bold uppercase mr-1">View Filters:</span>
+                    <button
+                        onClick={() => setShow5m(!show5m)}
+                        className={clsx(
+                            "flex items-center gap-2 px-3 py-1 text-xs font-bold rounded transition-colors border",
+                            show5m ? "bg-purple-500/20 text-purple-400 border-purple-500/30" : "text-gray-500 border-transparent hover:bg-white/5"
+                        )}
+                    >
+                        {show5m ? <Eye size={12} /> : <EyeOff size={12} />} 5m
+                    </button>
+                    <button
+                        onClick={() => setShow30m(!show30m)}
+                        className={clsx(
+                            "flex items-center gap-2 px-3 py-1 text-xs font-bold rounded transition-colors border",
+                            show30m ? "bg-blue-500/20 text-blue-400 border-blue-500/30" : "text-gray-500 border-transparent hover:bg-white/5"
+                        )}
+                    >
+                        {show30m ? <Eye size={12} /> : <EyeOff size={12} />} 30m
+                    </button>
+                </div>
+
                 {/* Right: Timezone Toggle */}
-                <div className="flex items-center gap-3 bg-black/20 p-1.5 rounded-lg border border-white/5">
+                <div className="flex items-center gap-3 bg-black/20 p-1.5 rounded-lg border border-white/5 order-2 xl:order-3">
                     <Clock size={14} className="text-gray-500 ml-2" />
                     <div className="flex">
                         <button
@@ -130,14 +148,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
-                        {events.length === 0 ? (
+                        {filteredEvents.length === 0 ? (
                             <tr>
                                 <td colSpan={7} className="p-12 text-center text-gray-600 italic flex flex-col items-center justify-center gap-4">
                                     <Activity size={48} className="opacity-20" />
                                     {isScanning ? 'Scanning for high-volume anomalies...' : 'Radar Offline. Click START to begin.'}
                                 </td>
                             </tr>
-                        ) : events.map((ev) => (
+                        ) : filteredEvents.map((ev) => (
                             <tr
                                 key={ev.id}
                                 onClick={() => onSelectTicker(ev.symbol)}

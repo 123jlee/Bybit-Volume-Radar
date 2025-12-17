@@ -1,6 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Activity, Settings as SettingsIcon, Globe, BarChart2 } from 'lucide-react';
-import { Scanner } from './services/scanner';
 import { Dashboard } from './components/Dashboard';
 import { TickerDetail } from './components/TickerDetail';
 import { Settings } from './components/Settings';
@@ -9,15 +8,11 @@ import { Reports } from './components/Reports';
 
 type View = 'dashboard' | 'ticker' | 'settings' | 'universe' | 'reports';
 
-const App: React.FC = () => {
+import { ScannerProvider } from './contexts/ScannerContext';
+
+const AppContent: React.FC = () => {
   const [view, setView] = useState<View>('dashboard');
   const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
-
-  useEffect(() => {
-    // Start Scanner on Mount
-    Scanner.start();
-    return () => Scanner.stop();
-  }, []);
 
   const handleSelectTicker = (symbol: string) => {
     setSelectedTicker(symbol);
@@ -83,6 +78,14 @@ const App: React.FC = () => {
         {renderView()}
       </div>
     </div>
+  );
+};
+
+const App: React.FC = () => {
+  return (
+    <ScannerProvider>
+      <AppContent />
+    </ScannerProvider>
   );
 };
 

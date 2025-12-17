@@ -120,40 +120,56 @@ export class ScannerEngine {
     private analyze(symbol: string, timeframe: Timeframe, candles: OHLCV[], settings: AppSettings) {
         if (candles.length < 50) return;
 
-        const current = candles[candles.length - 1]; // Developing
-        const stats = this.calculateStatistics(candles, 21);
+        // "Backfill" - Check the last 3 candles to ensure we catch recent anomalies immediately
+        // Iterating from len-3 to len-1
+        const startIndex = Math.max(50, candles.length - 3);
 
-        if (!stats || stats.stdDev === 0) return;
+        for (let i = startIndex; i < candles.length; i++) {
+            const current = candles[i];
 
-        // Formula: (Current Volume - EMA(21)) / StdDev(21)
-        const zScore = (current.volume - stats.ema) / stats.stdDev;
+            // To calculate stats correctly for index 'i', we should use history 0 to i-1. 
+            // Optimally we'd re-calc every time. Given checking only 3, it's fine.
+            const stats = this.calculateStatistics(candles.slice(0, i + 1), 21); // i+1 to include current potential candle? No, calcStats expects full array and slices off last one. 
+            // Wait, calculateStatistics(candles) slices off the last one. 
+            // If we pass candles.slice(0, i+1), the last item is 'current'. calculateStatistics will slice it off and use remainder as history. Correct.
 
-        if (zScore > 2.0) {
-            // Classification
-            const severity: VolumeEvent['severity'] = zScore > 3.0 ? 'high' : 'medium';
+            if (!stats || stats.stdDev === 0) continue;
 
-            const isGreen = current.close >= current.open;
-            const type: VolumeEvent['type'] = isGreen ? 'bullish' : 'bearish';
+            // Formula: (Current Volume - EMA(21)) / StdDev(21)
+            const zScore = (current.volume - stats.ema) / stats.stdDev;
 
-            const event: VolumeEvent = {
-                id: `${symbol}-${timeframe}-${current.time}`,
-                symbol,
-                timeframe,
-                time: current.time, // Open time
-                type,
-                severity,
-                zScore: parseFloat(zScore.toFixed(2)),
-                openPrice: current.open,
-                closePrice: current.close
-            };
+            if (zScore > 2.0) {
+                // Classification
+                const severity: VolumeEvent['severity'] = zScore > 3.0 ? 'high' : 'medium';
 
-            const existing = Store.getEvents().find(e => e.id === event.id);
-            if (!existing) {
-                Store.addEvent(event);
-                if (settings.soundEnabled && severity === 'high') {
-                    this.playPing();
+                const isGreen = current.close >= current.open;
+                const type: VolumeEvent['type'] = isGreen ? 'bullish' : 'bearish';
+
+                const event: VolumeEvent = {
+                    id: `${symbol}-${timeframe}-${current.time}`,
+                    symbol,
+                    timeframe,
+                    time: current.time, // Open time
+                    type,
+                    severity,
+                    zScore: parseFloat(zScore.toFixed(2)),
+                    openPrice: current.open,
+                    closePrice: current.close
+                };
+
+                const existing = Store.getEvents().find(e => e.id === event.id);
+                if (!existing) {
+                    Store.addEvent(event);
+                    if (settings.soundEnabled && severity === 'high') {
+                        // Only play sound for the LATEST candle to avoid spamming on backfill
+                        if (i === candles.length - 1) {
+                            this.playPing();
+                        }
+                    }
+                    if (i === candles.length - 1) {
+                        document.title = `(${Store.getEvents().length}) Vol. Radar`;
+                    }
                 }
-                document.title = `(${Store.getEvents().length}) Vol. Radar`;
             }
         }
     }
