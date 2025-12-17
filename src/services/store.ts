@@ -68,8 +68,16 @@ class StoreService {
         // We put newest first
         this.events.unshift(event);
         // Keep max events to avoid memory leak
-        if (this.events.length > 500) {
-            this.events = this.events.slice(0, 500);
+        if (this.events.length > 1000) {
+            this.events = this.events.slice(0, 1000);
+        }
+        this.notify();
+    }
+
+    public setEvents(events: VolumeEvent[]) {
+        this.events = events;
+        if (this.events.length > 1000) {
+            this.events = this.events.slice(0, 1000);
         }
         this.notify();
     }

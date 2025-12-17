@@ -5,10 +5,12 @@ import { Store } from './store';
 export class ScannerEngine {
     private isScanning = false;
     private intervalId: any = null;
+    private initialBackfillDone = false;
 
     public start() {
         if (this.isScanning) return;
         this.isScanning = true;
+        this.initialBackfillDone = false; // Reset on start
         this.runLoop();
         // Poll every 60s
         this.intervalId = setInterval(() => this.runLoop(), 60000);
@@ -25,153 +27,166 @@ export class ScannerEngine {
 
     private async runLoop() {
         const settings = Store.getSettings();
-        const symbols = Store.getSymbols();
+        let symbols = Store.getSymbols();
 
+        // 1. Ensure Universe
         if (symbols.length === 0) {
             console.log('Universe empty, fetching top symbols...');
             const newSymbols = await BybitService.fetchMarketUniverse(settings);
             Store.updateSymbols(newSymbols);
-            return;
+            symbols = newSymbols;
         }
 
         const BATCH_SIZE = 5;
+        // Temporary bucket for backfill events if this is the first run
+        let backfillEvents: VolumeEvent[] = [];
 
         for (let i = 0; i < symbols.length; i += BATCH_SIZE) {
+            if (!this.isScanning) break;
             const batch = symbols.slice(i, i + BATCH_SIZE);
 
             await Promise.all(batch.map(async (symbolData) => {
-                await this.scanSymbol(symbolData.symbol, settings);
+                const events = await this.scanSymbol(symbolData.symbol, settings, !this.initialBackfillDone);
+                if (events) {
+                    backfillEvents.push(...events);
+                }
             }));
 
-            // Rate limit safety
-            await new Promise(res => setTimeout(res, 500));
+            // Rate limit
+            await new Promise(res => setTimeout(res, 200));
+        }
+
+        if (!this.initialBackfillDone) {
+            // First run: Sort all gathered events and SET store
+            backfillEvents.sort((a, b) => b.time - a.time);
+            console.log(`Backfill complete. Found ${backfillEvents.length} events.`);
+            Store.setEvents(backfillEvents);
+            this.initialBackfillDone = true;
         }
     }
 
-    private async scanSymbol(symbol: string, settings: AppSettings) {
-        // 1. Fetch 100 candles (needed for EMA warm-up)
+    private async scanSymbol(symbol: string, settings: AppSettings, isBackfill: boolean): Promise<VolumeEvent[] | null> {
+        // Fetch 100 5m candles
+        // Hard constraint: 5m Only
         const LOOKBACK = 100;
 
         try {
-            const [candles5m, candles30m] = await Promise.all([
-                BybitService.fetchCandles(symbol, '5m', LOOKBACK, settings.apiEndpoint),
-                BybitService.fetchCandles(symbol, '30m', LOOKBACK, settings.apiEndpoint)
-            ]);
+            const candles = await BybitService.fetchCandles(symbol, '5m', LOOKBACK, settings.apiEndpoint);
 
-            // Update Store
+            // Update Store Data
             const currentData = Store.getSymbol(symbol);
             if (currentData) {
-                currentData.candles['5m'] = candles5m;
-                currentData.candles['30m'] = candles30m;
-                if (candles5m.length > 0) {
-                    currentData.price = candles5m[candles5m.length - 1].close;
+                currentData.candles['5m'] = candles;
+                if (candles.length > 0) {
+                    currentData.price = candles[candles.length - 1].close;
                 }
                 Store.updateSymbol(currentData);
             }
 
-            // Analyze
-            this.analyze(symbol, '5m', candles5m, settings);
-            this.analyze(symbol, '30m', candles30m, settings);
+            if (candles.length < 50) return null;
+
+            if (isBackfill) {
+                // HISTORICAL REPLAY: Check ALL candles from index 50 to end
+                return this.analyzeHistory(symbol, '5m', candles);
+            } else {
+                // LIVE MODE: Check only the LATEST candle
+                this.analyzeLatest(symbol, '5m', candles, settings);
+                return null;
+            }
 
         } catch (e) {
             console.error(`Failed to scan ${symbol}`, e);
+            return null;
         }
     }
 
-    private calculateStatistics(candles: OHLCV[], period: number = 21) {
-        // Need at least period + a few candles
-        if (candles.length < period + 10) return null;
+    // Helper to get stats for a specific window ending at index 'endIndex' (exclusive, i.e. stats of 0..endIndex-1)
+    private getStatsForWindow(candles: OHLCV[], endIndex: number, period: number = 21) {
+        // We need `period` candles before `endIndex`
+        if (endIndex < period) return null;
 
-        // Extract volumes
-        const volumes = candles.map(c => c.volume);
+        // Window of interest for stats: [0 ... endIndex-1]
+        // Actually, let's just take the last N candles up to endIndex-1
+        // Optimization: Use `candles.slice(Math.max(0, endIndex - period - 50), endIndex)` to avoid processing huge arrays, 
+        // but since max is 100, we can just slice 0..endIndex.
 
-        // Function to calculate EMA
-        const calculateEMA = (values: number[], days: number) => {
-            const k = 2 / (days + 1);
-            let ema = values[0];
-            for (let i = 1; i < values.length; i++) {
-                ema = values[i] * k + ema * (1 - k);
-            }
-            return ema;
-        };
+        const relevantHistory = candles.slice(0, endIndex);
+        const volumes = relevantHistory.map(c => c.volume);
+        const k = 2 / (period + 1);
 
-        // Function to calculate StdDev (Simple) of the last N items
-        const calculateStdDev = (values: number[], mean: number) => {
-            const squareDiffs = values.map(value => Math.pow(value - mean, 2));
-            const avgSquareDiff = squareDiffs.reduce((a, b) => a + b, 0) / values.length;
-            return Math.sqrt(avgSquareDiff);
-        };
+        // Calculate EMA over the whole history up to that point
+        let ema = volumes[0];
+        for (let j = 1; j < volumes.length; j++) {
+            ema = volumes[j] * k + ema * (1 - k);
+        }
 
-        // We want the EMA/StdDev of the HISTORY (excluding current developing candle)
-        // candles[0] is oldest, candles[last] is current (developing)
-        // BybitService returns oldest -> newest.
-        const historyVectors = volumes.slice(0, -1);
-
-        // Calculate EMA on the full history to let it stabilize
-        const ema = calculateEMA(historyVectors, period);
-
-        // Calculate StdDev on the recent window (last 21 of history)
-        const recentHistory = historyVectors.slice(-period);
-        const stdDev = calculateStdDev(recentHistory, ema);
+        // Calculate StdDev for the last 'period' candles
+        const recent = volumes.slice(-period);
+        const squareDiffs = recent.map(v => Math.pow(v - ema, 2));
+        const avgSquareDiff = squareDiffs.reduce((a, b) => a + b, 0) / recent.length;
+        const stdDev = Math.sqrt(avgSquareDiff);
 
         return { ema, stdDev };
     }
 
-    private analyze(symbol: string, timeframe: Timeframe, candles: OHLCV[], settings: AppSettings) {
-        if (candles.length < 50) return;
+    private analyzeHistory(symbol: string, timeframe: Timeframe, candles: OHLCV[]): VolumeEvent[] {
+        const events: VolumeEvent[] = [];
 
-        // "Backfill" - Check the last 3 candles to ensure we catch recent anomalies immediately
-        // Iterating from len-3 to len-1
-        const startIndex = Math.max(50, candles.length - 3);
-
-        for (let i = startIndex; i < candles.length; i++) {
-            const current = candles[i];
-
-            // To calculate stats correctly for index 'i', we should use history 0 to i-1. 
-            // Optimally we'd re-calc every time. Given checking only 3, it's fine.
-            const stats = this.calculateStatistics(candles.slice(0, i + 1), 21); // i+1 to include current potential candle? No, calcStats expects full array and slices off last one. 
-            // Wait, calculateStatistics(candles) slices off the last one. 
-            // If we pass candles.slice(0, i+1), the last item is 'current'. calculateStatistics will slice it off and use remainder as history. Correct.
-
+        // Start from 50 to give nice warm data
+        for (let i = 50; i < candles.length; i++) {
+            const stats = this.getStatsForWindow(candles, i, 21);
             if (!stats || stats.stdDev === 0) continue;
 
-            // Formula: (Current Volume - EMA(21)) / StdDev(21)
+            const current = candles[i];
             const zScore = (current.volume - stats.ema) / stats.stdDev;
 
             if (zScore > 2.0) {
-                // Classification
-                const severity: VolumeEvent['severity'] = zScore > 3.0 ? 'high' : 'medium';
-
-                const isGreen = current.close >= current.open;
-                const type: VolumeEvent['type'] = isGreen ? 'bullish' : 'bearish';
-
-                const event: VolumeEvent = {
-                    id: `${symbol}-${timeframe}-${current.time}`,
-                    symbol,
-                    timeframe,
-                    time: current.time, // Open time
-                    type,
-                    severity,
-                    zScore: parseFloat(zScore.toFixed(2)),
-                    openPrice: current.open,
-                    closePrice: current.close
-                };
-
-                const existing = Store.getEvents().find(e => e.id === event.id);
-                if (!existing) {
-                    Store.addEvent(event);
-                    if (settings.soundEnabled && severity === 'high') {
-                        // Only play sound for the LATEST candle to avoid spamming on backfill
-                        if (i === candles.length - 1) {
-                            this.playPing();
-                        }
-                    }
-                    if (i === candles.length - 1) {
-                        document.title = `(${Store.getEvents().length}) Vol. Radar`;
-                    }
-                }
+                events.push(this.createEvent(symbol, timeframe, current, zScore));
             }
         }
+        return events;
+    }
+
+    private analyzeLatest(symbol: string, timeframe: Timeframe, candles: OHLCV[], settings: AppSettings) {
+        const i = candles.length - 1;
+        const stats = this.getStatsForWindow(candles, i, 21);
+        if (!stats || stats.stdDev === 0) return;
+
+        const current = candles[i];
+        const zScore = (current.volume - stats.ema) / stats.stdDev;
+
+        if (zScore > 2.0) {
+            const event = this.createEvent(symbol, timeframe, current, zScore);
+            const existing = Store.getEvents().find(e => e.id === event.id);
+
+            if (!existing) {
+                Store.addEvent(event);
+                // Sound logic
+                const severity = event.severity;
+                if (settings.soundEnabled && severity === 'high') {
+                    this.playPing();
+                }
+                document.title = `(${Store.getEvents().length}) Vol. Radar`;
+            }
+        }
+    }
+
+    private createEvent(symbol: string, timeframe: Timeframe, candle: OHLCV, zScore: number): VolumeEvent {
+        const severity: VolumeEvent['severity'] = zScore > 3.0 ? 'high' : 'medium';
+        const isGreen = candle.close >= candle.open;
+        const type: VolumeEvent['type'] = isGreen ? 'bullish' : 'bearish';
+
+        return {
+            id: `${symbol}-${timeframe}-${candle.time}`,
+            symbol,
+            timeframe,
+            time: candle.time, // Open time
+            type,
+            severity,
+            zScore: parseFloat(zScore.toFixed(2)),
+            openPrice: candle.open,
+            closePrice: candle.close
+        };
     }
 
     private playPing() {

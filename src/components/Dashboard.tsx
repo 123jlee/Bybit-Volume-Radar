@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Store } from '../services/store';
 import { useScanner } from '../contexts/ScannerContext';
 import type { VolumeEvent } from '../types';
-import { PlayCircle, StopCircle, TrendingUp, TrendingDown, Clock, Activity, Eye, EyeOff } from 'lucide-react';
+import { PlayCircle, StopCircle, TrendingUp, TrendingDown, Clock, Activity, Eye, EyeOff, ChevronLeft, ChevronRight } from 'lucide-react';
 import clsx from 'clsx';
 import { formatTime } from '../utils/date';
 
@@ -19,7 +19,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
     // View State
     const [useUTC, setUseUTC] = useState(true);
     const [show5m, setShow5m] = useState(true);
-    const [show30m, setShow30m] = useState(true);
+    const [show30m, setShow30m] = useState(true); // Kept for legacy/future 30m support
+
+    // Pagination State
+    const [page, setPage] = useState(1);
+    const rowsPerPage = 50;
 
     useEffect(() => {
         // Subscribe to Store
@@ -30,10 +34,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
         return () => unsubscribe();
     }, []);
 
+    // Reset pagination when events change significantly?
+    // Actually, keep page 1 on new scan
+    useEffect(() => {
+        // Optionally reset to page 1 if events count changes drastically? 
+        // For now, let's just leave it. If user is on page 2 and live feed updates, 
+        // it might shift rows. It's a live feed. 
+    }, [events.length]);
+
+
     const toggleScanner = () => {
         if (isScanning) {
             stopScanner();
         } else {
+            // Reset to page 1 on fresh start
+            setPage(1);
             startScanner();
         }
     };
@@ -42,12 +57,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
     const filteredEvents = events.filter(ev => {
         if (ev.timeframe === '5m' && !show5m) return false;
         if (ev.timeframe === '30m' && !show30m) return false;
-        // Also handle 4h if it exists in legacy data, though we focused on 5m/30m now
-        if (ev.timeframe === '240' && !show30m) return false; // Group 4h with 30m toggle or hide? Let's just filter based on TF.
-        // If user wants 4H, they probably want it shown if 30m is enabled or add new toggle. 
-        // User asked for [5m] [30m] toggles.
         return true;
     });
+
+    // Pagination Logic
+    const totalPages = Math.max(1, Math.ceil(filteredEvents.length / rowsPerPage));
+    const paginatedEvents = filteredEvents.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+
+    const handleNextPage = () => {
+        if (page < totalPages) setPage(page + 1);
+    };
+
+    const handlePrevPage = () => {
+        if (page > 1) setPage(page - 1);
+    };
 
     return (
         <div className="p-6 max-w-7xl mx-auto space-y-6 animate-in fade-in duration-300">
@@ -134,92 +157,119 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
             </div>
 
             {/* Stream Table */}
-            <div className="bg-surface rounded-lg border border-white/5 shadow-2xl overflow-hidden min-h-[400px]">
-                <table className="w-full text-left text-sm font-mono">
-                    <thead className="bg-[#0a0c10] text-gray-500 uppercase tracking-wider text-xs border-b border-white/5 sticky top-0">
-                        <tr>
-                            <th className="p-4 w-[140px]">Time</th>
-                            <th className="p-4 w-[100px]">Symbol</th>
-                            <th className="p-4 w-[80px]">TF</th>
-                            <th className="p-4 w-[120px]">Signal</th>
-                            <th className="p-4 w-[100px]">Z-Score</th>
-                            <th className="p-4 text-right">Open</th>
-                            <th className="p-4 text-right">Close</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5">
-                        {filteredEvents.length === 0 ? (
+            <div className="bg-surface rounded-lg border border-white/5 shadow-2xl overflow-hidden min-h-[400px] flex flex-col">
+                <div className="flex-1 overflow-x-auto">
+                    <table className="w-full text-left text-sm font-mono">
+                        <thead className="bg-[#0a0c10] text-gray-500 uppercase tracking-wider text-xs border-b border-white/5 sticky top-0">
                             <tr>
-                                <td colSpan={7} className="p-12 text-center text-gray-600 italic flex flex-col items-center justify-center gap-4">
-                                    <Activity size={48} className="opacity-20" />
-                                    {isScanning ? 'Scanning for high-volume anomalies...' : 'Radar Offline. Click START to begin.'}
-                                </td>
+                                <th className="p-4 w-[140px]">Time</th>
+                                <th className="p-4 w-[100px]">Symbol</th>
+                                <th className="p-4 w-[80px]">TF</th>
+                                <th className="p-4 w-[120px]">Signal</th>
+                                <th className="p-4 w-[100px]">Z-Score</th>
+                                <th className="p-4 text-right">Open</th>
+                                <th className="p-4 text-right">Close</th>
                             </tr>
-                        ) : filteredEvents.map((ev) => (
-                            <tr
-                                key={ev.id}
-                                onClick={() => onSelectTicker(ev.symbol)}
-                                className="hover:bg-white/5 cursor-pointer transition-colors group animate-in slide-in-from-top-2 duration-300"
-                            >
-                                {/* Col 1: Time (Formatted) */}
-                                <td className="p-4 text-gray-400 border-l-2 border-transparent group-hover:border-blue-500">
-                                    {formatTime(ev.time, useUTC)}
-                                </td>
+                        </thead>
+                        <tbody className="divide-y divide-white/5">
+                            {paginatedEvents.length === 0 ? (
+                                <tr>
+                                    <td colSpan={7} className="p-12 text-center text-gray-600 italic flex flex-col items-center justify-center gap-4">
+                                        <Activity size={48} className="opacity-20" />
+                                        {isScanning ? 'Scanning history...' : 'Radar Offline. Click START to begin.'}
+                                    </td>
+                                </tr>
+                            ) : paginatedEvents.map((ev) => (
+                                <tr
+                                    key={ev.id}
+                                    onClick={() => onSelectTicker(ev.symbol)}
+                                    className="hover:bg-white/5 cursor-pointer transition-colors group animate-in slide-in-from-top-2 duration-300"
+                                >
+                                    {/* Col 1: Time (Formatted) */}
+                                    <td className="p-4 text-gray-400 border-l-2 border-transparent group-hover:border-blue-500">
+                                        {formatTime(ev.time, useUTC)}
+                                    </td>
 
-                                {/* Col 2: Symbol */}
-                                <td className="p-4 font-bold text-gray-200 group-hover:text-white">
-                                    {ev.symbol}
-                                </td>
+                                    {/* Col 2: Symbol */}
+                                    <td className="p-4 font-bold text-gray-200 group-hover:text-white">
+                                        {ev.symbol}
+                                    </td>
 
-                                {/* Col 3: Timeframe */}
-                                <td className="p-4">
-                                    <span className={clsx(
-                                        "px-2 py-0.5 rounded text-[10px] font-bold border",
-                                        ev.timeframe === '5m'
-                                            ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
-                                            : "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                                    {/* Col 3: Timeframe */}
+                                    <td className="p-4">
+                                        <span className={clsx(
+                                            "px-2 py-0.5 rounded text-[10px] font-bold border",
+                                            ev.timeframe === '5m'
+                                                ? "bg-purple-500/10 text-purple-400 border-purple-500/20"
+                                                : "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                                        )}>
+                                            {ev.timeframe === '240' ? '4H' : ev.timeframe}
+                                        </span>
+                                    </td>
+
+                                    {/* Col 4: Signal */}
+                                    <td className="p-4">
+                                        {ev.type === 'bullish' ? (
+                                            <span className="flex items-center gap-1 text-success bg-success/10 px-2 py-0.5 rounded w-fit text-xs border border-success/20">
+                                                <TrendingUp size={12} /> BULL
+                                            </span>
+                                        ) : (
+                                            <span className="flex items-center gap-1 text-danger bg-danger/10 px-2 py-0.5 rounded w-fit text-xs border border-danger/20">
+                                                <TrendingDown size={12} /> BEAR
+                                            </span>
+                                        )}
+                                    </td>
+
+                                    {/* Col 5: Z-Score */}
+                                    <td className={clsx(
+                                        "p-4 font-bold text-base",
+                                        ev.zScore > 3.0 ? "text-danger drop-shadow-md" : "text-warning"
                                     )}>
-                                        {ev.timeframe === '240' ? '4H' : ev.timeframe}
-                                    </span>
-                                </td>
+                                        {ev.zScore.toFixed(2)}
+                                    </td>
 
-                                {/* Col 4: Signal */}
-                                <td className="p-4">
-                                    {ev.type === 'bullish' ? (
-                                        <span className="flex items-center gap-1 text-success bg-success/10 px-2 py-0.5 rounded w-fit text-xs border border-success/20">
-                                            <TrendingUp size={12} /> BULL
-                                        </span>
-                                    ) : (
-                                        <span className="flex items-center gap-1 text-danger bg-danger/10 px-2 py-0.5 rounded w-fit text-xs border border-danger/20">
-                                            <TrendingDown size={12} /> BEAR
-                                        </span>
-                                    )}
-                                </td>
+                                    {/* Col 6: Open */}
+                                    <td className="p-4 text-right text-gray-500 text-xs">
+                                        ${ev.openPrice}
+                                    </td>
 
-                                {/* Col 5: Z-Score */}
-                                <td className={clsx(
-                                    "p-4 font-bold text-base",
-                                    ev.zScore > 3.0 ? "text-danger drop-shadow-md" : "text-warning"
-                                )}>
-                                    {ev.zScore.toFixed(2)}
-                                </td>
+                                    {/* Col 7: Close */}
+                                    <td className={clsx(
+                                        "p-4 text-right font-bold text-sm",
+                                        ev.closePrice > ev.openPrice ? "text-success" : "text-danger"
+                                    )}>
+                                        ${ev.closePrice}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
 
-                                {/* Col 6: Open */}
-                                <td className="p-4 text-right text-gray-500 text-xs">
-                                    ${ev.openPrice}
-                                </td>
-
-                                {/* Col 7: Close */}
-                                <td className={clsx(
-                                    "p-4 text-right font-bold text-sm",
-                                    ev.closePrice > ev.openPrice ? "text-success" : "text-danger"
-                                )}>
-                                    ${ev.closePrice}
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
+                {/* Pagination Footer */}
+                {filteredEvents.length > 0 && (
+                    <div className="border-t border-white/5 p-4 flex justify-between items-center bg-[#0d0f12]">
+                        <div className="text-xs text-gray-500 font-mono">
+                            Page {page} of {totalPages} ({filteredEvents.length} Events)
+                        </div>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={handlePrevPage}
+                                disabled={page === 1}
+                                className="p-2 rounded hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                            >
+                                <ChevronLeft size={16} />
+                            </button>
+                            <button
+                                onClick={handleNextPage}
+                                disabled={page === totalPages}
+                                className="p-2 rounded hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                            >
+                                <ChevronRight size={16} />
+                            </button>
+                        </div>
+                    </div>
+                )}
             </div>
         </div>
     );
