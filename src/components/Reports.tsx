@@ -11,7 +11,7 @@ export const Reports: React.FC = () => {
     const [symbols, setSymbols] = useState<string[]>([]);
     const [config, setConfig] = useState<ReportConfig>({
         symbols: [],
-        timeframe: '240',
+        timeframes: ['240'],
         lookback: 500,
         minZScore: 2.0
     });
@@ -39,8 +39,13 @@ export const Reports: React.FC = () => {
         const universe = Store.getSymbols().map(d => d.symbol);
         setSymbols(universe);
 
-        const savedState = Store.getReportState();
+        const savedState = Store.getReportState() as any; // Cast to any to handle migration
         if (savedState) {
+            // Migration: timeframe -> timeframes
+            if (savedState.config.timeframe && !savedState.config.timeframes) {
+                savedState.config.timeframes = [savedState.config.timeframe];
+            }
+
             setConfig(savedState.config);
             setResults(savedState.results);
         } else {
@@ -180,19 +185,32 @@ export const Reports: React.FC = () => {
                 {/* Timeframe */}
                 <div>
                     <label className="block text-xs uppercase text-gray-400 mb-1">Timeframe</label>
-                    <div className="flex bg-[#121418] rounded p-1 border border-white/10">
-                        {(['30m', '240'] as const).map(tf => (
-                            <button
-                                key={tf}
-                                onClick={() => updateConfig('timeframe', tf)}
-                                className={clsx(
-                                    "flex-1 px-2 py-1 text-xs font-mono font-bold uppercase rounded transition-colors",
-                                    config.timeframe === tf ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"
-                                )}
-                            >
-                                {tf === '240' ? '4H' : tf}
-                            </button>
-                        ))}
+                    <div className="flex bg-[#121418] rounded p-1 border border-white/10 gap-1">
+                        {(['5m', '30m', '240'] as const).map(tf => {
+                            const isActive = config.timeframes.includes(tf);
+                            return (
+                                <button
+                                    key={tf}
+                                    onClick={() => {
+                                        const current = config.timeframes;
+                                        let next;
+                                        if (current.includes(tf)) {
+                                            if (current.length === 1) return; // Prevent empty
+                                            next = current.filter(t => t !== tf);
+                                        } else {
+                                            next = [...current, tf];
+                                        }
+                                        updateConfig('timeframes', next);
+                                    }}
+                                    className={clsx(
+                                        "flex-1 px-2 py-1 text-xs font-mono font-bold uppercase rounded transition-colors",
+                                        isActive ? "bg-orange-600 text-white" : "text-gray-400 hover:text-white hover:bg-white/5"
+                                    )}
+                                >
+                                    {tf === '240' ? '4H' : tf}
+                                </button>
+                            );
+                        })}
                     </div>
                 </div>
 
@@ -200,15 +218,21 @@ export const Reports: React.FC = () => {
                 <div>
                     <label className="block text-xs uppercase text-gray-400 mb-1">Lookback & Min Z</label>
                     <div className="flex gap-2">
-                        <select
-                            value={config.lookback}
-                            onChange={(e) => updateConfig('lookback', Number(e.target.value))}
-                            className="bg-[#121418] border border-white/10 rounded px-2 py-2 text-xs text-white outline-none w-1/2"
-                        >
-                            <option value={200}>Last 200</option>
-                            <option value={500}>Last 500</option>
-                            <option value={1000}>Max (1000)</option>
-                        </select>
+                        <div className="w-1/2 flex flex-col justify-center h-[34px] bg-[#121418] border border-white/10 rounded px-2">
+                            <div className="flex justify-between items-center mb-1">
+                                <span className="text-[10px] text-gray-500 uppercase font-bold">Limit</span>
+                                <span className="text-xs font-mono font-bold text-blue-400">{config.lookback}</span>
+                            </div>
+                            <input
+                                type="range"
+                                min={100}
+                                max={1000}
+                                step={50}
+                                value={config.lookback}
+                                onChange={(e) => updateConfig('lookback', Number(e.target.value))}
+                                className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                            />
+                        </div>
                         <select
                             value={config.minZScore}
                             onChange={(e) => updateConfig('minZScore', Number(e.target.value))}
@@ -338,7 +362,7 @@ export const Reports: React.FC = () => {
                                         </td>
                                         <td className="p-4">
                                             <span className="bg-[#121418] border border-white/10 px-2 py-1 rounded text-xs text-blue-400 font-bold">
-                                                {ev.timeframe === '240' ? '4H' : '30M'}
+                                                {ev.timeframe === '240' ? '4H' : ev.timeframe.toUpperCase()}
                                             </span>
                                         </td>
                                         <td className="p-4 font-bold text-gray-200">

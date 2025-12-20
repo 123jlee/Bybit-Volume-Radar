@@ -1,40 +1,46 @@
 import { BybitService } from './bybit';
 import { Store } from './store';
-import type { OHLCV, Timeframe, VolumeEvent } from '../types';
-
-export interface ReportConfig {
-    symbols: string[];
-    timeframe: Timeframe;
-    lookback: number; // 200, 500, 1000
-    minZScore: number;
-}
+import type { OHLCV, Timeframe, VolumeEvent, ReportConfig } from '../types';
 
 export class HistoricalReporter {
 
     public static async generateReport(config: ReportConfig, onProgress: (progress: string) => void): Promise<VolumeEvent[]> {
         const settings = Store.getSettings();
         const results: VolumeEvent[] = [];
-        const BATCH_SIZE = 5;
 
-        for (let i = 0; i < config.symbols.length; i += BATCH_SIZE) {
-            const batch = config.symbols.slice(i, i + BATCH_SIZE);
-            onProgress(`Scanning ${i + 1} - ${Math.min(i + BATCH_SIZE, config.symbols.length)} / ${config.symbols.length}...`);
+        // Flatten tasks: each symbol + timeframe combo is a task
+        const tasks: { symbol: string, timeframe: Timeframe }[] = [];
+        for (const symbol of config.symbols) {
+            for (const tf of config.timeframes) {
+                tasks.push({ symbol, timeframe: tf });
+            }
+        }
 
-            await Promise.all(batch.map(async (symbol) => {
+        const totalTasks = tasks.length;
+        // Batch size for concurrent requests
+        const BATCH_SIZE = 10;
+
+        for (let i = 0; i < totalTasks; i += BATCH_SIZE) {
+            const batch = tasks.slice(i, i + BATCH_SIZE);
+            // Progress: "Processing... (10/150)"
+            const doneCount = Math.min(i + BATCH_SIZE, totalTasks);
+            onProgress(`Processing... (${doneCount}/${totalTasks})`);
+
+            await Promise.all(batch.map(async (task) => {
                 try {
-                    const candles = await BybitService.fetchCandles(symbol, config.timeframe, config.lookback, settings.apiEndpoint);
-                    const anomalies = this.scanHistory(symbol, config.timeframe, candles, config.minZScore);
+                    const candles = await BybitService.fetchCandles(task.symbol, task.timeframe, config.lookback, settings.apiEndpoint);
+                    const anomalies = this.scanHistory(task.symbol, task.timeframe, candles, config.minZScore);
                     results.push(...anomalies);
                 } catch (e) {
-                    console.error(`Failed to report on ${symbol}`, e);
+                    console.error(`Failed to report on ${task.symbol} ${task.timeframe}`, e);
                 }
             }));
 
             // Rate limit safety
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 200));
         }
 
-        // Sort by Time Descending
+        // Sort by Time Descending (Newest First)
         return results.sort((a, b) => b.time - a.time);
     }
 

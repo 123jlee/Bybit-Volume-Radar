@@ -52,7 +52,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 export interface ReportConfig {
     symbols: string[];
-    timeframe: Timeframe;
+    timeframes: Timeframe[];
     lookback: number;
     minZScore: number;
 }
