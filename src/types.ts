@@ -39,6 +39,7 @@ export interface AppSettings {
     minVolumeRatio: number;
     minZScore: number;
     soundEnabled: boolean;
+    useUTC: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -48,6 +49,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     minVolumeRatio: 2.0,
     minZScore: 2.0, // Default to a reasonable "Strong" threshold
     soundEnabled: true,
+    useUTC: true,
 };
 
 export interface ReportConfig {

@@ -17,7 +17,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
     const [events, setEvents] = useState<VolumeEvent[]>([]);
 
     // View State
-    const [useUTC, setUseUTC] = useState(true);
+    const [useUTC, setUseUTC] = useState(Store.getSettings().useUTC);
     const [show5m, setShow5m] = useState(true);
     const [show30m, setShow30m] = useState(true); // Kept for legacy/future 30m support
 
@@ -29,6 +29,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
         // Subscribe to Store
         const unsubscribe = Store.subscribe(() => {
             setEvents([...Store.getEvents()]);
+            setUseUTC(Store.getSettings().useUTC);
         });
         setEvents(Store.getEvents());
         return () => unsubscribe();
@@ -135,7 +136,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
                     <Clock size={14} className="text-gray-500 ml-2" />
                     <div className="flex">
                         <button
-                            onClick={() => setUseUTC(true)}
+                            onClick={() => Store.saveSettings({ useUTC: true })}
                             className={clsx(
                                 "px-3 py-1 text-xs font-bold rounded transition-colors",
                                 useUTC ? "bg-blue-600 text-white" : "text-gray-500 hover:text-gray-300"
@@ -144,7 +145,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onSelectTicker }) => {
                             UTC
                         </button>
                         <button
-                            onClick={() => setUseUTC(false)}
+                            onClick={() => Store.saveSettings({ useUTC: false })}
                             className={clsx(
                                 "px-3 py-1 text-xs font-bold rounded transition-colors",
                                 !useUTC ? "bg-blue-600 text-white" : "text-gray-500 hover:text-gray-300"

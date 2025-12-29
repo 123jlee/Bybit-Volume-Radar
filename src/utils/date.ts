@@ -23,3 +23,16 @@ export const formatTime = (timestamp: number, useUTC: boolean): string => {
         return `${timePart} ${tzCode}`;
     }
 }
+
+export const formatDateTime = (timestamp: number, useUTC: boolean): string => {
+    const date = new Date(timestamp);
+    if (useUTC) {
+        const d = date.toISOString().split('T')[0]; // YYYY-MM-DD
+        const t = date.toISOString().split('T')[1].substring(0, 5); // HH:mm
+        return `${d} ${t} UTC`;
+    } else {
+        const d = date.toLocaleDateString();
+        const t = formatTime(timestamp, false);
+        return `${d} ${t}`;
+    }
+}

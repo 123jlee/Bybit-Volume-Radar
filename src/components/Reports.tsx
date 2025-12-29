@@ -4,6 +4,7 @@ import { HistoricalReporter } from '../services/reporter';
 import type { VolumeEvent, ReportConfig, ReportState } from '../types';
 import { Download, PlayCircle, Loader2, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
 import { MultiSelect } from './ui/MultiSelect';
+import { formatDateTime } from '../utils/date';
 import clsx from 'clsx';
 
 export const Reports: React.FC = () => {
@@ -20,6 +21,15 @@ export const Reports: React.FC = () => {
     // --- Local UI State ---
     const [isScanning, setIsScanning] = useState(false);
     const [progress, setProgress] = useState('');
+
+    // Timezone
+    const [useUTC, setUseUTC] = useState(Store.getSettings().useUTC);
+    useEffect(() => {
+        const unsubscribe = Store.subscribe(() => {
+            setUseUTC(Store.getSettings().useUTC);
+        });
+        return () => unsubscribe();
+    }, []);
 
     // Pagination
     const [page, setPage] = useState(1);
@@ -136,10 +146,22 @@ export const Reports: React.FC = () => {
         if (processedData.length === 0) return;
         const headers = ['Date', 'Time', 'Symbol', 'Timeframe', 'Type', 'Z-Score', 'Open', 'Close'].join(',');
         const rows = processedData.map(ev => {
-            const date = new Date(ev.time);
+            // Use unified format logic for CSV too
+            const dateTimeStr = formatDateTime(ev.time, useUTC);
+            // Split if needed or keep as one column. 
+            // Original code split Date and Time into matched columns.
+            // Let's split by space to match original 2 columns if possible, or just parse.
+            // formatDateTime returns "YYYY-MM-DD HH:mm (TZ)"
+            // Actually, let's just use the formatDateTime string as "Date/Time" or split it?
+            // Original headers: ['Date', 'Time', ...]
+            // So we need 2 columns.
+            const parts = dateTimeStr.split(' ');
+            const dateStr = parts[0];
+            const timeStr = parts.slice(1).join(' '); // HH:mm UTC or HH:mm Loc
+
             return [
-                date.toLocaleDateString(),
-                date.toLocaleTimeString(),
+                dateStr,
+                timeStr,
                 ev.symbol,
                 ev.timeframe,
                 ev.type,
@@ -171,7 +193,7 @@ export const Reports: React.FC = () => {
             </div>
 
             {/* Persistence / Config Bar */}
-            <div className="bg-surface p-4 rounded-lg border border-white/5 grid grid-cols-1 md:grid-cols-5 gap-4 items-end z-10 relative">
+            <div className="bg-surface p-4 rounded-lg border border-white/5 grid grid-cols-1 md:grid-cols-6 gap-4 items-end z-10 relative">
                 {/* Custom Multi Select */}
                 <div className="col-span-2">
                     <MultiSelect
@@ -246,6 +268,31 @@ export const Reports: React.FC = () => {
                     </div>
                 </div>
 
+                {/* Timezone */}
+                <div>
+                    <label className="block text-xs uppercase text-gray-400 mb-1">Timezone</label>
+                    <div className="flex bg-[#121418] rounded p-1 border border-white/10 gap-1">
+                        <button
+                            onClick={() => Store.saveSettings({ useUTC: true })}
+                            className={clsx(
+                                "flex-1 px-2 py-1 text-xs font-mono font-bold uppercase rounded transition-colors",
+                                useUTC ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"
+                            )}
+                        >
+                            UTC
+                        </button>
+                        <button
+                            onClick={() => Store.saveSettings({ useUTC: false })}
+                            className={clsx(
+                                "flex-1 px-2 py-1 text-xs font-mono font-bold uppercase rounded transition-colors",
+                                !useUTC ? "bg-blue-600 text-white" : "text-gray-400 hover:text-white"
+                            )}
+                        >
+                            LOC
+                        </button>
+                    </div>
+                </div>
+
                 {/* Action */}
                 <div>
                     <button
@@ -260,194 +307,198 @@ export const Reports: React.FC = () => {
             </div>
 
             {/* Progress */}
-            {isScanning && (
-                <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden">
-                    <div className="bg-blue-500 h-full w-full animate-pulse"></div>
-                </div>
-            )}
+            {
+                isScanning && (
+                    <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden">
+                        <div className="bg-blue-500 h-full w-full animate-pulse"></div>
+                    </div>
+                )
+            }
             {progress && <div className="text-xs font-mono text-gray-400 text-center">{progress}</div>}
 
             {/* Results Section */}
-            {results.length > 0 && (
-                <div className="space-y-2">
-                    <div className="flex justify-between items-center text-xs text-gray-400 bg-[#121418] border border-white/10 p-2 rounded">
-                        <div className="flex gap-4">
-                            <span>Found: <strong className="text-white">{results.length}</strong></span>
-                            <span>Showing: <strong className="text-white">{processedData.length}</strong> (filtered)</span>
+            {
+                results.length > 0 && (
+                    <div className="space-y-2">
+                        <div className="flex justify-between items-center text-xs text-gray-400 bg-[#121418] border border-white/10 p-2 rounded">
+                            <div className="flex gap-4">
+                                <span>Found: <strong className="text-white">{results.length}</strong></span>
+                                <span>Showing: <strong className="text-white">{processedData.length}</strong> (filtered)</span>
+                            </div>
+                            <button onClick={handleExport} className="flex items-center gap-2 hover:text-white transition-colors">
+                                <Download size={14} /> Export CSV
+                            </button>
                         </div>
-                        <button onClick={handleExport} className="flex items-center gap-2 hover:text-white transition-colors">
-                            <Download size={14} /> Export CSV
-                        </button>
-                    </div>
 
-                    {/* Excel Table */}
-                    <div className="overflow-x-auto bg-surface rounded-lg border border-white/5 shadow-2xl">
-                        <table className="w-full text-left text-sm font-mono">
-                            <thead className="bg-[#121418] text-gray-400 uppercase tracking-wider text-xs border-b border-white/5">
-                                {/* Header Row */}
-                                <tr>
-                                    <th className="p-4 cursor-pointer hover:bg-white/5 w-[180px]" onClick={() => handleSort('time')}>
-                                        <div className="flex items-center gap-1">Time <SortIcon col="time" /></div>
-                                    </th>
-                                    <th className="p-4 cursor-pointer hover:bg-white/5 w-[100px]" onClick={() => handleSort('timeframe')}>
-                                        <div className="flex items-center gap-1">TF <SortIcon col="timeframe" /></div>
-                                    </th>
-                                    <th className="p-4 cursor-pointer hover:bg-white/5 w-[120px]" onClick={() => handleSort('symbol')}>
-                                        <div className="flex items-center gap-1">Symbol <SortIcon col="symbol" /></div>
-                                    </th>
-                                    <th className="p-4 cursor-pointer hover:bg-white/5 w-[120px]" onClick={() => handleSort('type')}>
-                                        <div className="flex items-center gap-1">Signal <SortIcon col="type" /></div>
-                                    </th>
-                                    <th className="p-4 cursor-pointer hover:bg-white/5 w-[100px]" onClick={() => handleSort('zScore')}>
-                                        <div className="flex items-center gap-1">Z-Score <SortIcon col="zScore" /></div>
-                                    </th>
-                                    <th className="p-4 text-right cursor-pointer hover:bg-white/5" onClick={() => handleSort('openPrice')}>
-                                        <div className="flex items-center justify-end gap-1">Open <SortIcon col="openPrice" /></div>
-                                    </th>
-                                    <th className="p-4 text-right cursor-pointer hover:bg-white/5" onClick={() => handleSort('closePrice')}>
-                                        <div className="flex items-center justify-end gap-1">Close <SortIcon col="closePrice" /></div>
-                                    </th>
-                                </tr>
-
-                                {/* Filter Row */}
-                                <tr className="bg-[#121418] border-b border-white/5">
-                                    <td className="p-2 border-r border-white/5"></td> {/* Time */}
-                                    <td className="p-2 border-r border-white/5"></td> {/* TF */}
-                                    <td className="p-2 border-r border-white/5">
-                                        <div className="relative">
-                                            <Filter size={10} className="absolute left-2 top-2.5 text-gray-500" />
-                                            <input
-                                                type="text"
-                                                placeholder="Filter..."
-                                                value={filterSymbol}
-                                                onChange={(e) => setFilterSymbol(e.target.value)}
-                                                className="w-full bg-black/20 border border-white/10 rounded py-1 pl-6 pr-2 text-xs text-white outline-none focus:border-blue-500"
-                                            />
-                                        </div>
-                                    </td>
-                                    <td className="p-2 border-r border-white/5">
-                                        <select
-                                            value={filterSignal}
-                                            onChange={(e) => setFilterSignal(e.target.value as any)}
-                                            className="w-full bg-black/20 border border-white/10 rounded py-1 px-2 text-xs text-white outline-none"
-                                        >
-                                            <option value="all">All</option>
-                                            <option value="bullish">Bullish</option>
-                                            <option value="bearish">Bearish</option>
-                                        </select>
-                                    </td>
-                                    <td className="p-2 border-r border-white/5">
-                                        <div className="flex items-center gap-1">
-                                            <span className="text-gray-500 text-xs">&gt;</span>
-                                            <input
-                                                type="number"
-                                                placeholder="2.0"
-                                                step="0.1"
-                                                value={filterMinZ}
-                                                onChange={(e) => setFilterMinZ(e.target.value)}
-                                                className="w-full bg-black/20 border border-white/10 rounded py-1 px-2 text-xs text-white outline-none focus:border-blue-500"
-                                            />
-                                        </div>
-                                    </td>
-                                    <td className="p-2 border-r border-white/5"></td> {/* Open */}
-                                    <td className="p-2"></td> {/* Close */}
-                                </tr>
-                            </thead>
-
-                            <tbody className="divide-y divide-white/5">
-                                {paginatedData.map((ev, i) => (
-                                    <tr key={ev.id + i} className="hover:bg-white/5 transition-colors">
-                                        <td className="p-4 text-gray-400">
-                                            {new Date(ev.time).toLocaleString([], { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
-                                        </td>
-                                        <td className="p-4">
-                                            <span className="bg-[#121418] border border-white/10 px-2 py-1 rounded text-xs text-blue-400 font-bold">
-                                                {ev.timeframe === '240' ? '4H' : ev.timeframe.toUpperCase()}
-                                            </span>
-                                        </td>
-                                        <td className="p-4 font-bold text-gray-200">
-                                            {ev.symbol}
-                                        </td>
-                                        <td className="p-4">
-                                            {ev.type === 'bullish' ? (
-                                                <span className="flex items-center gap-1 text-success bg-success/10 px-2 py-0.5 rounded w-fit">
-                                                    <TrendingUp size={12} /> BULL
-                                                </span>
-                                            ) : (
-                                                <span className="flex items-center gap-1 text-danger bg-danger/10 px-2 py-0.5 rounded w-fit">
-                                                    <TrendingDown size={12} /> BEAR
-                                                </span>
-                                            )}
-                                        </td>
-                                        <td className={clsx(
-                                            "p-4 font-bold text-lg",
-                                            ev.zScore > 3.0 ? "text-danger" : "text-warning"
-                                        )}>
-                                            {ev.zScore.toFixed(2)}
-                                        </td>
-                                        <td className="p-4 text-right text-gray-400">
-                                            ${ev.openPrice}
-                                        </td>
-                                        <td className={clsx(
-                                            "p-4 text-right font-bold",
-                                            ev.closePrice > ev.openPrice ? "text-success" : "text-danger"
-                                        )}>
-                                            ${ev.closePrice}
-                                        </td>
+                        {/* Excel Table */}
+                        <div className="overflow-x-auto bg-surface rounded-lg border border-white/5 shadow-2xl">
+                            <table className="w-full text-left text-sm font-mono">
+                                <thead className="bg-[#121418] text-gray-400 uppercase tracking-wider text-xs border-b border-white/5">
+                                    {/* Header Row */}
+                                    <tr>
+                                        <th className="p-4 cursor-pointer hover:bg-white/5 w-[180px]" onClick={() => handleSort('time')}>
+                                            <div className="flex items-center gap-1">Time <SortIcon col="time" /></div>
+                                        </th>
+                                        <th className="p-4 cursor-pointer hover:bg-white/5 w-[100px]" onClick={() => handleSort('timeframe')}>
+                                            <div className="flex items-center gap-1">TF <SortIcon col="timeframe" /></div>
+                                        </th>
+                                        <th className="p-4 cursor-pointer hover:bg-white/5 w-[120px]" onClick={() => handleSort('symbol')}>
+                                            <div className="flex items-center gap-1">Symbol <SortIcon col="symbol" /></div>
+                                        </th>
+                                        <th className="p-4 cursor-pointer hover:bg-white/5 w-[120px]" onClick={() => handleSort('type')}>
+                                            <div className="flex items-center gap-1">Signal <SortIcon col="type" /></div>
+                                        </th>
+                                        <th className="p-4 cursor-pointer hover:bg-white/5 w-[100px]" onClick={() => handleSort('zScore')}>
+                                            <div className="flex items-center gap-1">Z-Score <SortIcon col="zScore" /></div>
+                                        </th>
+                                        <th className="p-4 text-right cursor-pointer hover:bg-white/5" onClick={() => handleSort('openPrice')}>
+                                            <div className="flex items-center justify-end gap-1">Open <SortIcon col="openPrice" /></div>
+                                        </th>
+                                        <th className="p-4 text-right cursor-pointer hover:bg-white/5" onClick={() => handleSort('closePrice')}>
+                                            <div className="flex items-center justify-end gap-1">Close <SortIcon col="closePrice" /></div>
+                                        </th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
 
-                    {/* Pagination Footer */}
-                    <div className="flex justify-between items-center bg-[#121418] rounded-lg p-2 border border-white/5">
-                        <div className="flex items-center gap-4 text-xs text-gray-400">
-                            <span>Rows per page:</span>
-                            <select
-                                value={rowsPerPage}
-                                onChange={(e) => {
-                                    setRowsPerPage(Number(e.target.value));
-                                    setPage(1);
-                                }}
-                                className="bg-black/20 border border-white/10 rounded px-2 py-1 outline-none text-white"
-                            >
-                                <option value={25}>25</option>
-                                <option value={50}>50</option>
-                                <option value={100}>100</option>
-                            </select>
+                                    {/* Filter Row */}
+                                    <tr className="bg-[#121418] border-b border-white/5">
+                                        <td className="p-2 border-r border-white/5"></td> {/* Time */}
+                                        <td className="p-2 border-r border-white/5"></td> {/* TF */}
+                                        <td className="p-2 border-r border-white/5">
+                                            <div className="relative">
+                                                <Filter size={10} className="absolute left-2 top-2.5 text-gray-500" />
+                                                <input
+                                                    type="text"
+                                                    placeholder="Filter..."
+                                                    value={filterSymbol}
+                                                    onChange={(e) => setFilterSymbol(e.target.value)}
+                                                    className="w-full bg-black/20 border border-white/10 rounded py-1 pl-6 pr-2 text-xs text-white outline-none focus:border-blue-500"
+                                                />
+                                            </div>
+                                        </td>
+                                        <td className="p-2 border-r border-white/5">
+                                            <select
+                                                value={filterSignal}
+                                                onChange={(e) => setFilterSignal(e.target.value as any)}
+                                                className="w-full bg-black/20 border border-white/10 rounded py-1 px-2 text-xs text-white outline-none"
+                                            >
+                                                <option value="all">All</option>
+                                                <option value="bullish">Bullish</option>
+                                                <option value="bearish">Bearish</option>
+                                            </select>
+                                        </td>
+                                        <td className="p-2 border-r border-white/5">
+                                            <div className="flex items-center gap-1">
+                                                <span className="text-gray-500 text-xs">&gt;</span>
+                                                <input
+                                                    type="number"
+                                                    placeholder="2.0"
+                                                    step="0.1"
+                                                    value={filterMinZ}
+                                                    onChange={(e) => setFilterMinZ(e.target.value)}
+                                                    className="w-full bg-black/20 border border-white/10 rounded py-1 px-2 text-xs text-white outline-none focus:border-blue-500"
+                                                />
+                                            </div>
+                                        </td>
+                                        <td className="p-2 border-r border-white/5"></td> {/* Open */}
+                                        <td className="p-2"></td> {/* Close */}
+                                    </tr>
+                                </thead>
+
+                                <tbody className="divide-y divide-white/5">
+                                    {paginatedData.map((ev, i) => (
+                                        <tr key={ev.id + i} className="hover:bg-white/5 transition-colors">
+                                            <td className="p-4 text-gray-400">
+                                                {formatDateTime(ev.time, useUTC)}
+                                            </td>
+                                            <td className="p-4">
+                                                <span className="bg-[#121418] border border-white/10 px-2 py-1 rounded text-xs text-blue-400 font-bold">
+                                                    {ev.timeframe === '240' ? '4H' : ev.timeframe.toUpperCase()}
+                                                </span>
+                                            </td>
+                                            <td className="p-4 font-bold text-gray-200">
+                                                {ev.symbol}
+                                            </td>
+                                            <td className="p-4">
+                                                {ev.type === 'bullish' ? (
+                                                    <span className="flex items-center gap-1 text-success bg-success/10 px-2 py-0.5 rounded w-fit">
+                                                        <TrendingUp size={12} /> BULL
+                                                    </span>
+                                                ) : (
+                                                    <span className="flex items-center gap-1 text-danger bg-danger/10 px-2 py-0.5 rounded w-fit">
+                                                        <TrendingDown size={12} /> BEAR
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className={clsx(
+                                                "p-4 font-bold text-lg",
+                                                ev.zScore > 3.0 ? "text-danger" : "text-warning"
+                                            )}>
+                                                {ev.zScore.toFixed(2)}
+                                            </td>
+                                            <td className="p-4 text-right text-gray-400">
+                                                ${ev.openPrice}
+                                            </td>
+                                            <td className={clsx(
+                                                "p-4 text-right font-bold",
+                                                ev.closePrice > ev.openPrice ? "text-success" : "text-danger"
+                                            )}>
+                                                ${ev.closePrice}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
 
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs text-gray-400">
-                                Page {page} of {totalPages || 1}
-                            </span>
-                            <div className="flex gap-1">
-                                <button
-                                    onClick={() => {
-                                        setPage(p => Math.max(1, p - 1));
-                                        window.scrollTo({ top: 0, behavior: 'smooth' }); // As requested
+                        {/* Pagination Footer */}
+                        <div className="flex justify-between items-center bg-[#121418] rounded-lg p-2 border border-white/5">
+                            <div className="flex items-center gap-4 text-xs text-gray-400">
+                                <span>Rows per page:</span>
+                                <select
+                                    value={rowsPerPage}
+                                    onChange={(e) => {
+                                        setRowsPerPage(Number(e.target.value));
+                                        setPage(1);
                                     }}
-                                    disabled={page === 1}
-                                    className="p-1 hover:bg-white/10 rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                                    className="bg-black/20 border border-white/10 rounded px-2 py-1 outline-none text-white"
                                 >
-                                    <ChevronLeft size={16} />
-                                </button>
-                                <button
-                                    onClick={() => {
-                                        setPage(p => Math.min(totalPages, p + 1));
-                                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                                    }}
-                                    disabled={page >= totalPages}
-                                    className="p-1 hover:bg-white/10 rounded disabled:opacity-30 disabled:cursor-not-allowed"
-                                >
-                                    <ChevronRight size={16} />
-                                </button>
+                                    <option value={25}>25</option>
+                                    <option value={50}>50</option>
+                                    <option value={100}>100</option>
+                                </select>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-gray-400">
+                                    Page {page} of {totalPages || 1}
+                                </span>
+                                <div className="flex gap-1">
+                                    <button
+                                        onClick={() => {
+                                            setPage(p => Math.max(1, p - 1));
+                                            window.scrollTo({ top: 0, behavior: 'smooth' }); // As requested
+                                        }}
+                                        disabled={page === 1}
+                                        className="p-1 hover:bg-white/10 rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                                    >
+                                        <ChevronLeft size={16} />
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setPage(p => Math.min(totalPages, p + 1));
+                                            window.scrollTo({ top: 0, behavior: 'smooth' });
+                                        }}
+                                        disabled={page >= totalPages}
+                                        className="p-1 hover:bg-white/10 rounded disabled:opacity-30 disabled:cursor-not-allowed"
+                                    >
+                                        <ChevronRight size={16} />
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 };
